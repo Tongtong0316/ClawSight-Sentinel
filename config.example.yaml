@@ -5,7 +5,7 @@ system:
   resources:
     ollama:
       memory_limit: 3G
-      default_model: deepseek-r1:1.5b
+      default_model: phi3:mini
 
 storage:
   log_path: /mnt/tf_card/sentinel_logs
