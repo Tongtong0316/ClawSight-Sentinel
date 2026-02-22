@@ -19,6 +19,7 @@ from pydantic import BaseModel
 
 from .collector import DataCollector
 from .analyzer import NetworkAnalyzer
+from .narrator import EventNarrator, identify_device, describe_dhcp_allocate, describe_device_offline, describe_abnormal_broadcast, describe_network_health
 
 # ========== 配置 ==========
 
@@ -64,6 +65,7 @@ if STATIC_DIR.exists():
 config: Dict[str, Any] = {}
 collector: Optional[DataCollector] = None
 analyzer: Optional[NetworkAnalyzer] = None
+narrator: Optional[EventNarrator] = None
 analysis_task: Optional[asyncio.Task] = None
 last_analysis: Optional[Dict] = None
 
@@ -94,7 +96,7 @@ def load_config() -> Dict[str, Any]:
 
 def init_services():
     """初始化服务"""
-    global config, collector, analyzer
+    global config, collector, analyzer, narrator
     
     config = load_config()
     
@@ -108,6 +110,10 @@ def init_services():
     
     # 初始化分析器
     analyzer = NetworkAnalyzer(collector, config.get("analysis", {}))
+    
+    # 初始化解说员
+    dhcp_server = config.get("openwrt", {}).get("ip", "192.168.100.1")
+    narrator = EventNarrator(dhcp_server=dhcp_server)
 
 
 # ========== 前端路由 ==========
@@ -270,6 +276,140 @@ async def wifi_scan_v1():
         return {"error": "not initialized"}
     
     return await collector.get_wifi_stats()
+
+
+# ========== 自然语言描述 API ==========
+
+@app.get("/api/v2/narrator/health")
+async def narrator_health():
+    """网络健康状态自然语言描述"""
+    global last_analysis
+    
+    if not last_analysis:
+        if analyzer:
+            last_analysis = await analyzer.analyze_network_health()
+    
+    if not last_analysis or not narrator:
+        return {"error": "not initialized"}
+    
+    description = narrator.describe_network_health(last_analysis)
+    return {"description": description, "data": last_analysis}
+
+
+@app.get("/api/v2/narrator/issues")
+async def narrator_issues():
+    """问题列表自然语言描述"""
+    global last_analysis
+    
+    if not last_analysis or not narrator:
+        return {"error": "not initialized"}
+    
+    issues = last_analysis.get("issues", [])
+    descriptions = [narrator.describe_issue(issue) for issue in issues]
+    
+    return {"descriptions": descriptions, "issues": issues}
+
+
+@app.get("/api/v2/narrator/device/{ip}")
+async def narrator_device(ip: str):
+    """设备状态自然语言描述"""
+    if not analyzer or not narrator:
+        return {"error": "not initialized"}
+    
+    device = await analyzer.get_device_details(ip)
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    
+    mac = device.get("mac", "")
+    status = device.get("status", "unknown")
+    
+    if status == "offline":
+        description = narrator.describe_device_offline(mac, ip)
+    else:
+        device_type = identify_device(mac)
+        description = f"{mac}（{device_type}）IP 地址 {ip} 当前在线"
+    
+    return {"ip": ip, "description": description, "device": device}
+
+
+@app.get("/api/v2/narrator/offline")
+async def narrator_offline_devices():
+    """离线设备自然语言描述"""
+    global last_analysis
+    
+    if not last_analysis or not narrator:
+        return {"error": "not initialized"}
+    
+    device_status = last_analysis.get("device_status", {})
+    offline_devices = [d for d in device_status.get("devices", []) if d.get("status") == "offline"]
+    
+    descriptions = []
+    for dev in offline_devices:
+        mac = dev.get("mac", "")
+        duration = dev.get("offline_duration_seconds", 0)
+        
+        hours = duration // 3600
+        minutes = (duration % 3600) // 60
+        
+        desc = narrator.describe_device_offline_duration(mac, hours, minutes)
+        descriptions.append({
+            "ip": dev.get("ip"),
+            "description": desc
+        })
+    
+    return {"count": len(descriptions), "devices": descriptions}
+
+
+@app.post("/api/v2/narrator/dhcp")
+async def narrator_dhcp_event(event: Dict):
+    """DHCP 事件自然语言描述"""
+    if not narrator:
+        return {"error": "not initialized"}
+    
+    event_type = event.get("type", "")
+    mac = event.get("mac", "")
+    ip = event.get("ip", "")
+    hostname = event.get("hostname")
+    lease_hours = event.get("lease_hours", 12)
+    
+    if event_type == "allocate":
+        description = narrator.describe_dhcp_allocate(mac, ip, hostname, lease_hours)
+    elif event_type == "renew":
+        description = narrator.describe_dhcp_renew(mac, ip, hostname, lease_hours)
+    elif event_type == "release":
+        description = narrator.describe_dhcp_release(mac, ip)
+    elif event_type == "expired":
+        description = narrator.describe_dhcp_expired(mac, ip)
+    else:
+        description = f"未知 DHCP 事件类型: {event_type}"
+    
+    return {"type": event_type, "description": description}
+
+
+@app.post("/api/v2/narrator/abnormal")
+async def narrator_abnormal_event(event: Dict):
+    """异常事件自然语言描述"""
+    if not narrator:
+        return {"error": "not initialized"}
+    
+    event_type = event.get("type", "")
+    mac = event.get("mac", "")
+    ip = event.get("ip", "")
+    
+    if event_type == "broadcast_storm":
+        packet_count = event.get("packet_count", 0)
+        threshold = event.get("threshold", 60)
+        description = narrator.describe_abnormal_broadcast(mac, ip, packet_count, threshold)
+    elif event_type == "packet_loss":
+        packet_loss = event.get("packet_loss_percent", 0)
+        description = narrator.describe_high_packet_loss(ip, packet_loss)
+    elif event_type == "latency":
+        latency = event.get("latency_ms", 0)
+        description = narrator.describe_high_latency(ip, latency)
+    else:
+        description = f"未知异常类型: {event_type}"
+    
+    return {"type": event_type, "description": description}
 
 
 # ========== 管理接口 ==========
