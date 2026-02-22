@@ -443,7 +443,70 @@ async def healthz():
     return {
         "ok": True,
         "service": "clawsight-sentinel",
-        "version": "3.0.0"
+        "version": "3.0.2"
+    }
+
+
+# ========== Agent 引导接口 ==========
+
+@app.get("/agent/guide")
+async def agent_guide():
+    """Agent 接入引导"""
+    return {
+        "name": "ClawSight Sentinel",
+        "version": "3.0.2",
+        "description": "网络监控日志整合 + 脚本化分析 + 自然语言描述",
+        "endpoints": {
+            "快速查询": {
+                "/api/v2/metrics/summary": "网络健康摘要（推荐外部 Agent 使用）",
+                "/api/v2/narrator/health": "网络健康自然语言描述",
+                "/api/v2/narrator/report": "完整分析报告（自然语言）",
+            },
+            "设备信息": {
+                "/api/v2/devices": "设备列表",
+                "/api/v2/devices/offline": "离线设备列表",
+                "/api/v2/metrics/device/{ip}": "单设备详情",
+                "/api/v2/narrator/device/{ip}": "设备自然语言描述",
+            },
+            "网络指标": {
+                "/api/v2/wifi/stats": "WiFi 统计",
+                "/api/v2/bandwidth": "带宽使用",
+                "/api/v2/trends": "24小时趋势",
+            },
+            "日志": {
+                "/api/v2/logs/recent": "最近日志",
+                "/api/v2/analysis": "历史分析",
+            },
+            "自然语言": {
+                "/api/v2/narrator/health": "网络健康描述",
+                "/api/v2/narrator/issues": "问题列表描述",
+                "/api/v2/narrator/offline": "离线设备描述",
+                "/api/v2/narrator/report": "完整报告",
+            }
+        },
+        "usage_examples": {
+            "获取网络状态": "GET /api/v2/metrics/summary",
+            "获取自然语言报告": "GET /api/v2/narrator/report",
+            "查询设备状态": "GET /api/v2/narrator/device/192.168.100.1",
+            "查询离线设备": "GET /api/v2/narrator/offline",
+        }
+    }
+
+
+@app.get("/api/agent/status")
+async def agent_status():
+    """Agent 状态查询"""
+    global last_analysis
+    
+    if not last_analysis:
+        if analyzer:
+            last_analysis = await analyzer.analyze_network_health()
+    
+    return {
+        "status": "ready",
+        "version": "3.0.2",
+        "last_analysis": last_analysis.get("timestamp") if last_analysis else None,
+        "recommendation": "调用 /api/v2/narrator/report 获取完整报告" if last_analysis else "等待数据采集"
     }
 
 
