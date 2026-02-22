@@ -18,10 +18,11 @@ scrape_configs:
           host: sentinel
           __path__: /var/log/*.log
 
-  # OpenWRT syslog 接收
+  # OpenWRT syslog 接收 (UDP 514)
   - job_name: openwrt-syslog
     syslog:
       listen_address: 0.0.0.0:514
+      protocol: udp
       labels:
         job: openwrt
         host: openwrt-router
