@@ -1,0 +1,49 @@
+services:
+  loki:
+    image: grafana/loki:latest
+    container_name: sentinel-loki
+    volumes:
+      - /mnt/tf_card/loki:/loki
+    command: -config.file=/etc/loki/local-config.yaml
+    cpuset_cpus: "0,1" # 限制在双核范围内
+    mem_limit: 512m
+    restart: always
+
+  promtail:
+    image: grafana/promtail:latest
+    container_name: sentinel-promtail
+    volumes:
+      - /var/log:/var/log
+      - /etc/sentinel/promtail:/etc/promtail
+    command: -config.file=/etc/promtail/config.yml
+    restart: always
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: sentinel-ollama
+    volumes:
+      - ollama_data:/root/.ollama
+    deploy:
+      resources:
+        limits:
+          cpus: '1.5' # 限制 AI 核心，防止抢占
+          memory: 3G
+    cpuset_cpus: "0,1"
+    restart: always
+
+  sentinel-api:
+    build: ./sentinel_api
+    container_name: sentinel-api
+    privileged: true # 允许访问 USB WiFi
+    volumes:
+      - /mnt/tf_card/logs:/app/logs
+      - /dev/bus/usb:/dev/bus/usb
+    ports:
+      - "8000:8000"
+    environment:
+      - TF_CARD_PATH=/app/logs
+      - OLLAMA_HOST=http://ollama:11434
+    restart: always
+
+volumes:
+  ollama_data:
