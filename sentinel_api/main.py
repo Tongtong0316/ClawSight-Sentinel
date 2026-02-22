@@ -278,7 +278,7 @@ async def run_scheduled_analysis():
             async with httpx.AsyncClient(timeout=180.0) as client:
                 resp = await client.post(
                     f"{OLLAMA_HOST}/api/generate",
-                    json={"model": model, "prompt": prompt, "stream": False, "options": {"num_predict": 20, "temperature": 0.1}},
+                    json={"model": model, "prompt": prompt, "stream": False, "options": {"num_predict": 200, "temperature": 0.1}},
                 )
                 resp.raise_for_status()
                 diagnosis_text = resp.json().get("response", "")
@@ -460,7 +460,7 @@ async def diagnose_logs(req: DiagnosisRequest):
                     "model": model,
                     "prompt": prompt,
                     "stream": False,
-                    "options": {"num_predict": 20, "temperature": 0.1},
+                    "options": {"num_predict": 200, "temperature": 0.1},
                 },
             )
             response.raise_for_status()
