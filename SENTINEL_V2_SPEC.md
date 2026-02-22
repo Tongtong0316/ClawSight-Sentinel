@@ -92,3 +92,87 @@ notifications:
 - **critical**: 紧急需要处理
 - **warning**: 需要关注
 - **info**: 正常信息
+
+## 4. WiFi 分析功能
+
+### 4.1 可分析项目
+```yaml
+wifi_analysis:
+  - signal_strength:          # 信号强度 (dBm)
+      good: > -50
+      fair: -50 ~ -70
+      poor: < -70
+      
+  - channel_congestion:     # 信道拥堵程度
+      clear: < 20%
+      moderate: 20-50%
+      congested: > 50%
+      
+  - channel_overlap:         # 信道重叠/干扰
+      none: 无重叠
+      partial: 部分重叠
+      severe: 严重干扰
+      
+  - connected_clients:      # 已连接客户端数
+      count: 当前设备数
+      auth_failures: 认证失败次数
+      
+  - ap_performance:        # AP 性能指标
+      uptime: 运行时间
+      bandwidth: 带宽使用
+      packet_loss: 丢包率
+      
+  - neighbor_networks:     # 邻近网络
+      ssid: 网络名称
+      channel: 信道
+      signal: 信号强度
+      security: 安全类型
+```
+
+### 4.2 WiFi 分析输出格式
+```json
+{
+  "timestamp": "2026-02-22T14:30:00Z",
+  "wifi": {
+    "interface": "wlan0",
+    "mode": "monitor",
+    "band": "5G",
+    "analysis": {
+      "signal_strength": {
+        "status": "good",
+        "current_dbm": -45,
+        "avg_dbm_5min": -48
+      },
+      "channel": {
+        "current": 149,
+        "congestion": "15%",
+        "recommendation": "当前信道良好"
+      },
+      "neighbors": [
+        {
+          "ssid": "NeighborNet",
+          "channel": 36,
+          "signal_dbm": -70,
+          "interference": "low"
+        }
+      ],
+      "clients": {
+        "count": 5,
+        "auth_failures": 0
+      }
+    },
+    "issues": [
+      {
+        "severity": "info",
+        "description": "信道 149 负载正常",
+        "recommendation": "保持当前配置"
+      }
+    ]
+  }
+}
+```
+
+### 4.3 定期 WiFi 扫描
+- 频率: 可配置 (默认 5 分钟)
+- 扫描内容: 信道利用率、邻居网络、信号质量
+- 存储: 分析结论保存到 TF 卡
