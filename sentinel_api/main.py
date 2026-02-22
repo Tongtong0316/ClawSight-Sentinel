@@ -412,6 +412,29 @@ async def narrator_abnormal_event(event: Dict):
     return {"type": event_type, "description": description}
 
 
+@app.get("/api/v2/narrator/report")
+async def narrator_full_report():
+    """完整分析报告（自然语言）"""
+    global last_analysis
+    
+    if not last_analysis:
+        if analyzer:
+            last_analysis = await analyzer.analyze_network_health()
+    
+    if not last_analysis or not narrator:
+        return {"error": "not initialized"}
+    
+    report = narrator.generate_report(last_analysis)
+    return {"report": report, "data": last_analysis}
+
+
+@app.get("/api/v2/narrator/daily")
+async def narrator_daily_summary():
+    """每日摘要"""
+    # TODO: 实现每日统计
+    return {"error": "not implemented"}
+
+
 # ========== 管理接口 ==========
 
 @app.get("/healthz")
