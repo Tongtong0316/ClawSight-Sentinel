@@ -25,7 +25,7 @@ services:
     volumes:
       - ollama_data:/root/.ollama
     cpus: 1.5 # 限制 AI 核心，防止抢占
-    mem_limit: 3g
+    mem_limit: 5g
     cpuset: "0-1"
     restart: always
 
