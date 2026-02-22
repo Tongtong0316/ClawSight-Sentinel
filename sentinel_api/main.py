@@ -18,6 +18,11 @@ BASE_DIR = Path(__file__).resolve().parent
 app = FastAPI(title="ClawSight-Sentinel API", version="0.3.0")
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 
+
+@app.get("/", response_class=HTMLResponse)
+async def root():
+    return FileResponse(BASE_DIR / "static" / "index.html")
+
 CONFIG_PATH = os.getenv("SENTINEL_CONFIG", "/app/config/config.yaml")
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://ollama:11434")
 
