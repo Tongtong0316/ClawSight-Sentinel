@@ -451,44 +451,64 @@ async def healthz():
 
 @app.get("/agent/guide")
 async def agent_guide():
-    """Agent 接入引导"""
+    """Agent 接入引导 - 完整的网络分析工作流"""
     return {
         "name": "ClawSight Sentinel",
-        "version": "3.0.2",
-        "description": "网络监控日志整合 + 脚本化分析 + 自然语言描述",
-        "endpoints": {
-            "快速查询": {
-                "/api/v2/metrics/summary": "网络健康摘要（推荐外部 Agent 使用）",
-                "/api/v2/narrator/health": "网络健康自然语言描述",
-                "/api/v2/narrator/report": "完整分析报告（自然语言）",
+        "version": "3.0.3",
+        "purpose": "让 Agent 接入后知道如何调取日志、分析网络、给出结论",
+        
+        "workflow": {
+            "step_1": {
+                "name": "获取网络状态",
+                "endpoint": "GET /api/v2/metrics/summary",
+                "description": "获取网络健康摘要，包含在线/离线设备数、丢包率、延迟、WiFi状态"
             },
-            "设备信息": {
-                "/api/v2/devices": "设备列表",
-                "/api/v2/devices/offline": "离线设备列表",
-                "/api/v2/metrics/device/{ip}": "单设备详情",
-                "/api/v2/narrator/device/{ip}": "设备自然语言描述",
+            "step_2": {
+                "name": "获取完整分析",
+                "endpoint": "GET /api/v2/metrics/full",
+                "description": "获取完整分析结果，包含设备状态、WiFi统计、带宽、问题列表"
             },
-            "网络指标": {
-                "/api/v2/wifi/stats": "WiFi 统计",
-                "/api/v2/bandwidth": "带宽使用",
-                "/api/v2/trends": "24小时趋势",
+            "step_3": {
+                "name": "获取自然语言报告",
+                "endpoint": "GET /api/v2/narrator/report",
+                "description": "获取完整的自然语言分析报告，可直接用于向用户展示"
             },
-            "日志": {
-                "/api/v2/logs/recent": "最近日志",
-                "/api/v2/analysis": "历史分析",
-            },
-            "自然语言": {
-                "/api/v2/narrator/health": "网络健康描述",
-                "/api/v2/narrator/issues": "问题列表描述",
-                "/api/v2/narrator/offline": "离线设备描述",
-                "/api/v2/narrator/report": "完整报告",
+            "step_4": {
+                "name": "查询特定设备(可选)",
+                "endpoint": "GET /api/v2/narrator/device/{ip}",
+                "description": "查询特定设备的详细信息"
             }
         },
-        "usage_examples": {
-            "获取网络状态": "GET /api/v2/metrics/summary",
-            "获取自然语言报告": "GET /api/v2/narrator/report",
-            "查询设备状态": "GET /api/v2/narrator/device/192.168.100.1",
-            "查询离线设备": "GET /api/v2/narrator/offline",
+        
+        "recommended_flow": [
+            "1. GET /api/v2/metrics/summary → 获取网络概览",
+            "2. GET /api/v2/narrator/report → 获取完整分析报告(包含结论)",
+            "3. 可选: GET /api/v2/narrator/device/{ip} → 查询特定设备",
+            "4. 可选: GET /api/v2/narrator/offline → 查看离线设备详情"
+        ],
+        
+        "how_to_conclude": {
+            "核心": "调用 /api/v2/narrator/report 获取自然语言报告",
+            "报告包含": [
+                "整体网络状态(正常/异常)",
+                "发现的问题列表(严重程度+描述+建议)",
+                "离线设备详情(设备类型+IP+离线时长)",
+                "WiFi连接状态",
+                "网络指标(丢包率、延迟、带宽)"
+            ],
+            "结论": "根据报告内容生成最终结论和建议"
+        },
+        
+        "quick_reference": {
+            "网络健康": "/api/v2/metrics/summary",
+            "完整报告(推荐)": "/api/v2/narrator/report",
+            "问题列表": "/api/v2/narrator/issues",
+            "离线设备": "/api/v2/narrator/offline",
+            "设备列表": "/api/v2/devices",
+            "WiFi统计": "/api/v2/wifi/stats",
+            "带宽使用": "/api/v2/bandwidth",
+            "历史趋势": "/api/v2/trends",
+            "最近日志": "/api/v2/logs/recent"
         }
     }
 
@@ -504,7 +524,7 @@ async def agent_status():
     
     return {
         "status": "ready",
-        "version": "3.0.2",
+        "version": "3.0.3",
         "last_analysis": last_analysis.get("timestamp") if last_analysis else None,
         "recommendation": "调用 /api/v2/narrator/report 获取完整报告" if last_analysis else "等待数据采集"
     }
