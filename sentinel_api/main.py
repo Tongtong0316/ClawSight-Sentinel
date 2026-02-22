@@ -322,11 +322,20 @@ async def scheduler_loop():
 
 @app.on_event("startup")
 async def startup_event():
-    global analysis_task
+    global config, analysis_task
     config = load_config()
     storage_dirs()
     update_next_run()
     analysis_task = asyncio.create_task(scheduler_loop())
+
+
+def init_config():
+    global config
+    config = load_config()
+    storage_dirs()
+
+
+init_config()
 
 
 @app.on_event("shutdown")
