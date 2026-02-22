@@ -1,536 +1,607 @@
+"""
+ClawSight-Sentinel v3.0 主程序
+- 日志整合 + 时间对齐
+- 脚本化分析
+- 自建 WebUI
+- 外部 API
+"""
 import asyncio
-import json
 import os
-from copy import deepcopy
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
-import httpx
 import yaml
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from .collector import DataCollector
+from .analyzer import NetworkAnalyzer
+
+# ========== 配置 ==========
+
 BASE_DIR = Path(__file__).resolve().parent
-
-app = FastAPI(title="ClawSight-Sentinel API", version="0.3.0")
-app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
-
-
-@app.get("/", response_class=HTMLResponse)
-async def root():
-    return FileResponse(BASE_DIR / "static" / "index.html")
-
-CONFIG_PATH = os.getenv("SENTINEL_CONFIG", "/mnt/tf_card/sentinel/config/config.yaml")
-OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://ollama:11434")
+STATIC_DIR = BASE_DIR / "static"
 
 DEFAULT_CONFIG: Dict[str, Any] = {
-    "ui": {"language": "zh-CN", "theme": "dark"},
-    "system": {
-        "cpu_affinity": {"enabled": True, "cores": [0, 1]},
-        "resources": {"ollama": {"default_model": "gemma:2b"}},
+    "openwrt": {
+        "ip": "192.168.100.1",
+        "snmp_community": "public",
+        "snmp_port": 161
     },
-    "wifi": {
-        "interfaces": [
-            {"name": "wlan0", "driver": "rtl8812au", "mode": "monitor", "band": "5g"}
-        ]
+    "storage": {
+        "log_path": "/data/sentinel",
+        "retention_days": 30
     },
-    "automation": {"scripts": []},
-    "storage": {"log_path": "/mnt/tf_card/sentinel", "retention": {"days": 30, "max_size_gb": 28}},
-    "analysis": {"frequency_minutes": 5, "max_logs_per_run": 2000, "enabled": True},
-    "notifications": {"enabled": False, "webhook_url": ""},
+    "analysis": {
+        "offline_threshold_minutes": 30,
+        "packet_loss_warning": 1.0,
+        "packet_loss_critical": 5.0,
+        "latency_warning_ms": 100,
+        "latency_critical_ms": 500
+    },
+    "webui": {
+        "port": 8080,
+        "title": "ClawSight Sentinel"
+    }
 }
 
-config: Dict[str, Any]
+# ========== 初始化 ==========
 
-analysis_state: Dict[str, Any] = {"last_run": None, "next_run": None, "running": False}
+app = FastAPI(
+    title="ClawSight Sentinel API",
+    version="3.0.0",
+    description="网络监控日志整合 + 脚本化分析"
+)
+
+# 挂载静态文件
+if STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+# 全局状态
+config: Dict[str, Any] = {}
+collector: Optional[DataCollector] = None
+analyzer: Optional[NetworkAnalyzer] = None
 analysis_task: Optional[asyncio.Task] = None
-
-
-def deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
-    merged = deepcopy(base)
-    for key, value in (override or {}).items():
-        if isinstance(value, dict) and isinstance(merged.get(key), dict):
-            merged[key] = deep_merge(merged[key], value)
-        else:
-            merged[key] = value
-    return merged
+last_analysis: Optional[Dict] = None
 
 
 def load_config() -> Dict[str, Any]:
-    if Path(CONFIG_PATH).exists():
-        with open(CONFIG_PATH, "r", encoding="utf-8") as fh:
-            data = yaml.safe_load(fh) or {}
-        return deep_merge(DEFAULT_CONFIG, data)
-    return deepcopy(DEFAULT_CONFIG)
+    """加载配置"""
+    config_path = os.getenv("SENTINEL_CONFIG", "/data/sentinel/config/config.yaml")
+    config_file = Path(config_path)
+    
+    if config_file.exists():
+        with open(config_file, "r", encoding="utf-8") as f:
+            user_config = yaml.safe_load(f) or {}
+        
+        # 深度合并
+        def deep_merge(base: Dict, override: Dict) -> Dict:
+            result = base.copy()
+            for key, value in override.items():
+                if isinstance(value, dict) and key in result:
+                    result[key] = deep_merge(result[key], value)
+                else:
+                    result[key] = value
+            return result
+        
+        return deep_merge(DEFAULT_CONFIG, user_config)
+    
+    return DEFAULT_CONFIG.copy()
 
 
-def persist_config(data: Dict[str, Any]) -> None:
-    Path(CONFIG_PATH).parent.mkdir(parents=True, exist_ok=True)
-    with open(CONFIG_PATH, "w", encoding="utf-8") as fh:
-        yaml.safe_dump(data, fh, sort_keys=False, allow_unicode=True)
+def init_services():
+    """初始化服务"""
+    global config, collector, analyzer
+    
+    config = load_config()
+    
+    # 创建存储目录
+    storage_path = Path(config.get("storage", {}).get("log_path", "/data/sentinel"))
+    storage_path.mkdir(parents=True, exist_ok=True)
+    (storage_path / "logs").mkdir(exist_ok=True)
+    
+    # 初始化采集器
+    collector = DataCollector(config)
+    
+    # 初始化分析器
+    analyzer = NetworkAnalyzer(collector, config.get("analysis", {}))
 
 
-def storage_dirs() -> Dict[str, Path]:
-    storage_root = Path(config.get("storage", {}).get("log_path", "/mnt/tf_card/sentinel"))
-    raw_dir = storage_root / "raw_logs"
-    analysis_dir = storage_root / "analysis"
-    for d in (storage_root, raw_dir, analysis_dir):
-        d.mkdir(parents=True, exist_ok=True)
-    return {"root": storage_root, "raw": raw_dir, "analysis": analysis_dir}
+# ========== 前端路由 ==========
+
+@app.get("/", response_class=HTMLResponse)
+async def root():
+    """主页面"""
+    index_file = STATIC_DIR / "index.html"
+    if index_file.exists():
+        return FileResponse(index_file)
+    
+    # 如果没有前端文件，返回内置 HTML
+    return HTMLResponse(BUILTIN_HTML)
 
 
-def ensure_within_limit(amount: int, root: Path, max_bytes: int) -> None:
-    files = sorted(root.rglob("*"), key=lambda p: p.stat().st_mtime)
-    used = sum(p.stat().st_size for p in files if p.is_file())
-    for path in files:
-        if not path.is_file():
-            continue
-        if used <= max_bytes:
-            break
-        try:
-            size = path.stat().st_size
-            path.unlink()
-            used -= size
-        except OSError:
-            continue
+@app.get("/dashboard")
+async def dashboard_page():
+    """仪表盘页面"""
+    return await root()
 
 
-def store_raw_log(text: str) -> Path:
-    dirs = storage_dirs()
-    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-    filename = dirs["raw"] / f"raw_{timestamp}.log"
-    with open(filename, "w", encoding="utf-8") as fh:
-        fh.write(text)
-    max_size = config.get("storage", {}).get("retention", {}).get("max_size_gb", 28)
-    ensure_within_limit(max_size, dirs["root"], max_size * 1024**3)
-    return filename
+# ========== API v2 端点 ==========
+
+@app.get("/api/v2/metrics/summary")
+async def get_metrics_summary():
+    """网络健康摘要 - 供外部 LLM/Agent 调用"""
+    if not analyzer:
+        raise HTTPException(status_code=503, detail="Service not initialized")
+    
+    result = await analyzer.analyze_network_health()
+    return result["summary"]
 
 
-def load_analysis_file(path: Path) -> Optional[Dict[str, Any]]:
-    if not path.exists():
-        return None
-    with open(path, "r", encoding="utf-8") as fh:
-        return json.load(fh)
+@app.get("/api/v2/metrics/full")
+async def get_metrics_full():
+    """完整指标"""
+    if not analyzer:
+        raise HTTPException(status_code=503, detail="Service not initialized")
+    
+    return await analyzer.analyze_network_health()
 
 
-def list_files(directory: Path, limit: int = 20) -> List[Dict[str, Any]]:
-    files = sorted(directory.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True)
-    summaries = []
-    for entry in files[:limit]:
-        summaries.append(
-            {
-                "name": entry.name,
-                "size": entry.stat().st_size,
-                "mtime": datetime.fromtimestamp(entry.stat().st_mtime).isoformat(),
-            }
-        )
-    return summaries
+@app.get("/api/v2/metrics/device/{ip}")
+async def get_device_metrics(ip: str):
+    """单设备指标"""
+    if not analyzer:
+        raise HTTPException(status_code=503, detail="Service not initialized")
+    
+    device = await analyzer.get_device_details(ip)
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    
+    return device
 
 
-def list_analyses(limit: int = 20) -> List[Dict[str, Any]]:
-    dirs = storage_dirs()
-    files = sorted(dirs["analysis"].iterdir(), key=lambda p: p.stat().st_mtime, reverse=True)
-    entries = []
-    for entry in files[:limit]:
-        data = load_analysis_file(entry)
-        if data:
-            data["_file"] = entry.name
-            entries.append(data)
-    return entries
-
-
-def store_analysis_entry(entry: Dict[str, Any]) -> Path:
-    dirs = storage_dirs()
-    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-    filename = dirs["analysis"] / f"analysis_{timestamp}.json"
-    with open(filename, "w", encoding="utf-8") as fh:
-        json.dump(entry, fh, ensure_ascii=False, indent=2)
-    max_size = config.get("storage", {}).get("retention", {}).get("max_size_gb", 28)
-    ensure_within_limit(max_size, dirs["root"], max_size * 1024**3)
-    return filename
-
-
-def severity_from_text(text: str) -> str:
-    lower = text.lower()
-    if any(keyword in lower for keyword in ["critical", "panic", "failure"]):
-        return "critical"
-    if any(keyword in lower for keyword in ["warn", "retry", "timeout", "error"]):
-        return "warning"
-    return "info"
-
-
-def standardize_diagnosis(raw: str, model: str, logs_count: int) -> Dict[str, Any]:
-    lines = [line.strip() for line in raw.splitlines() if line.strip()]
-    summary = lines[0] if lines else "分析完成，暂无高亮"
-    severity = severity_from_text(raw)
+@app.get("/api/v2/devices")
+async def get_devices(status: Optional[str] = None):
+    """设备列表"""
+    if not collector:
+        raise HTTPException(status_code=503, detail="Service not initialized")
+    
+    device_status = await collector.refresh_device_status()
+    devices = device_status.get("devices", [])
+    
+    if status:
+        devices = [d for d in devices if d.get("status") == status]
+    
     return {
-        "timestamp": datetime.utcnow().isoformat(),
-        "model": model,
-        "context_lines": logs_count,
-        "summary": summary,
-        "issues": [
-            {
-                "severity": severity,
-                "description": summary,
-                "recommendation": "请查看详细日志并依照建议处置。",
-            }
-        ],
-        "metrics": {"lines": logs_count, "model": model},
+        "total": len(devices),
+        "devices": devices
     }
 
 
-def scan_wifi_interface() -> Dict[str, Any]:
-    wifi_cfg = config.get("wifi", {}).get("interfaces", [])
-    if not wifi_cfg:
-        return {"error": "No WiFi interface configured"}
-    active = wifi_cfg[0]
-    driver = active.get("driver", "unknown")
-    if driver == "rtl8812au":
-        networks = [
-            {"ssid": "OpenWrt_5G", "signal": -45, "channel": 149, "congestion": 15},
-            {"ssid": "Neighbor", "signal": -70, "channel": 36, "congestion": 55},
-        ]
-        return {
-            "driver": driver,
-            "interface": active.get("name", "wlan0"),
-            "mode": active.get("mode", "monitor"),
-            "band": active.get("band", "5g"),
-            "networks": networks,
-        }
-    if driver in {"mt7601u", "ath9k_htc", "rt2800usb"}:
-        return {"driver": driver, "status": "driver profile loaded", "networks": []}
-    return {"driver": driver, "status": "unsupported-driver-profile"}
+@app.get("/api/v2/devices/offline")
+async def get_offline_devices():
+    """离线设备列表"""
+    if not analyzer:
+        raise HTTPException(status_code=503, detail="Service not initialized")
+    
+    return await analyzer.get_offline_devices_report()
 
 
-def build_wifi_analysis() -> Dict[str, Any]:
-    state = scan_wifi_interface()
-    networks = state.get("networks", [])
-    best_signal = min((n["signal"] for n in networks), default=-100)
-    severity = "info"
-    if best_signal < -70:
-        severity = "warning"
-    if best_signal < -85:
-        severity = "critical"
+@app.get("/api/v2/wifi/stats")
+async def get_wifi_stats():
+    """WiFi 统计"""
+    if not collector:
+        raise HTTPException(status_code=503, detail="Service not initialized")
+    
+    return await collector.get_wifi_stats()
+
+
+@app.get("/api/v2/bandwidth")
+async def get_bandwidth():
+    """带宽使用"""
+    if not collector:
+        raise HTTPException(status_code=503, detail="Service not initialized")
+    
+    return await collector.get_bandwidth_usage()
+
+
+@app.get("/api/v2/logs/recent")
+async def get_recent_logs(
+    limit: int = Query(100, ge=1, le=1000),
+    level: Optional[str] = None
+):
+    """最近日志"""
+    if not collector:
+        raise HTTPException(status_code=503, detail="Service not initialized")
+    
     return {
-        "interface": state.get("interface"),
-        "mode": state.get("mode"),
-        "band": state.get("band"),
-        "analysis": {
-            "signal_strength": {
-                "status": "good" if best_signal >= -60 else "fair",
-                "current_dbm": best_signal,
-                "avg_dbm": best_signal,
-            },
-            "neighbors": networks,
-            "issues": [
-                {
-                    "severity": severity,
-                    "description": "信号较弱" if severity != "info" else "信道良好",
-                    "recommendation": "建议调整天线或信道" if severity != "info" else "继续观察",
-                }
-            ],
-        },
+        "count": limit,
+        "logs": collector.get_recent_logs(limit, level)
     }
 
 
-def get_dashboard_snapshot() -> Dict[str, Any]:
+@app.get("/api/v2/analysis")
+async def get_analysis(limit: int = Query(10, ge=1, le=50)):
+    """历史分析结果"""
+    global last_analysis
+    
+    if not last_analysis:
+        # 执行一次分析
+        if analyzer:
+            last_analysis = await analyzer.analyze_network_health()
+    
+    # 返回历史趋势
+    trends = analyzer.get_trends(24) if analyzer else {}
+    
     return {
-        "config": config,
-        "logs": list_files(storage_dirs()["raw"], limit=3),
-        "analysis": list_analyses(limit=3),
+        "latest": last_analysis,
+        "trends": trends
     }
 
 
-def gather_recent_logs() -> str:
-    dirs = storage_dirs()
-    raw = dirs["raw"]
-    if not raw.exists():
-        return ""
-    files = sorted(raw.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True)
-    max_count = config.get("analysis", {}).get("max_logs_per_run", 2000)
-    lines = []
-    for f in files[:5]:
-        try:
-            content = f.read_text(encoding="utf-8")
-            lines.extend(content.splitlines())
-        except Exception:
-            continue
-        if len(lines) >= max_count:
-            break
-    return "\n".join(lines[:max_count])
+@app.get("/api/v2/trends")
+async def get_trends(hours: int = Query(24, ge=1, le=168)):
+    """趋势数据"""
+    if not analyzer:
+        raise HTTPException(status_code=503, detail="Service not initialized")
+    
+    return analyzer.get_trends(hours)
 
 
-async def run_scheduled_analysis():
-    global analysis_state
-    if analysis_state.get("running"):
-        return
-    analysis_state["running"] = True
-    try:
-        logs = gather_recent_logs()
-        if not logs:
-            return
-        model = config.get("system", {}).get("resources", {}).get("ollama", {}).get("default_model", "gemma:2b")
-        prompt = "You are a network expert. Analyze these OpenWrt logs and return: root cause, impact, and action plan.\n\n" + logs[:6000]
-        try:
-            async with httpx.AsyncClient(timeout=180.0) as client:
-                resp = await client.post(
-                    f"{OLLAMA_HOST}/api/generate",
-                    json={"model": model, "prompt": prompt, "stream": False, "options": {"num_predict": 50, "temperature": 0.1}},
-                )
-                resp.raise_for_status()
-                diagnosis_text = resp.json().get("response", "")
-        except Exception as e:
-            diagnosis_text = f"Error: {e}"
-        logs_count = len([l for l in logs.splitlines() if l.strip()])
-        entry = standardize_diagnosis(diagnosis_text, model, logs_count)
-        entry["logs_file"] = str(store_raw_log(logs))
-        entry["source"] = "scheduled"
-        store_analysis_entry(entry)
-        analysis_state["last_run"] = datetime.utcnow().isoformat()
-    finally:
-        analysis_state["running"] = False
-        update_next_run()
+# ========== 旧版兼容 API ==========
+
+@app.get("/api/v1/dashboard")
+async def dashboard_v1():
+    """旧版仪表盘兼容"""
+    if not analyzer:
+        return {"error": "not initialized"}
+    
+    result = await analyzer.analyze_network_health()
+    return result
 
 
-def update_next_run():
-    freq = config.get("analysis", {}).get("frequency_minutes", 5)
-    if config.get("analysis", {}).get("enabled", True):
-        analysis_state["next_run"] = (datetime.utcnow() + timedelta(minutes=freq)).isoformat()
-    else:
-        analysis_state["next_run"] = None
+@app.get("/api/v1/wifi/scan")
+async def wifi_scan_v1():
+    """旧版 WiFi 扫描兼容"""
+    if not collector:
+        return {"error": "not initialized"}
+    
+    return await collector.get_wifi_stats()
 
 
-async def scheduler_loop():
+# ========== 管理接口 ==========
+
+@app.get("/healthz")
+async def healthz():
+    """健康检查"""
+    return {
+        "ok": True,
+        "service": "clawsight-sentinel",
+        "version": "3.0.0"
+    }
+
+
+@app.get("/api/v1/config")
+async def get_config():
+    """获取配置"""
+    return config
+
+
+# ========== 定时分析任务 ==========
+
+async def scheduled_analysis():
+    """定时分析任务"""
+    global last_analysis, analysis_task
+    
     while True:
-        await asyncio.sleep(10)
-        if not config.get("analysis", {}).get("enabled", True):
-            continue
-        next_run = analysis_state.get("next_run")
-        if not next_run:
-            continue
-        try:
-            target = datetime.fromisoformat(next_run)
-        except Exception:
-            continue
-        if datetime.utcnow() >= target:
-            asyncio.create_task(run_scheduled_analysis())
-            update_next_run()
+        await asyncio.sleep(300)  # 5 分钟
+        
+        if analyzer:
+            try:
+                last_analysis = await analyzer.analyze_network_health()
+                print(f"[{datetime.now().isoformat()}] Analysis completed")
+            except Exception as e:
+                print(f"Analysis error: {e}")
 
+
+# ========== 启动/关闭事件 ==========
 
 @app.on_event("startup")
-async def startup_event():
-    global config, analysis_task
-    config = load_config()
-    storage_dirs()
-    update_next_run()
-    analysis_task = asyncio.create_task(scheduler_loop())
-
-
-def init_config():
-    global config
-    config = load_config()
-    storage_dirs()
-
-
-init_config()
+async def startup():
+    """启动"""
+    init_services()
+    
+    # 启动定时分析
+    global analysis_task
+    analysis_task = asyncio.create_task(scheduled_analysis())
+    
+    # 立即执行一次分析
+    if analyzer:
+        global last_analysis
+        last_analysis = await analyzer.analyze_network_health()
 
 
 @app.on_event("shutdown")
-async def shutdown_event():
+async def shutdown():
+    """关闭"""
     global analysis_task
     if analysis_task:
         analysis_task.cancel()
 
 
-@app.get("/healthz")
-async def healthz():
-    return {"ok": True, "service": "clawsight-sentinel"}
+# ========== 内置简单前端 ==========
 
+BUILTIN_HTML = """
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ClawSight Sentinel</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0f172a;
+            color: #e2e8f0;
+            min-height: 100vh;
+        }
+        .header {
+            background: #1e293b;
+            padding: 1rem 2rem;
+            border-bottom: 1px solid #334155;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .header h1 { font-size: 1.5rem; color: #38bdf8; }
+        .header .status {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #22c55e;
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 1.5rem;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+        .card {
+            background: #1e293b;
+            border-radius: 12px;
+            padding: 1.5rem;
+            border: 1px solid #334155;
+        }
+        .card h2 {
+            font-size: 0.875rem;
+            color: #94a3b8;
+            margin-bottom: 1rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .metric {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.75rem 0;
+            border-bottom: 1px solid #334155;
+        }
+        .metric:last-child { border-bottom: none; }
+        .metric-value {
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: #38bdf8;
+        }
+        .metric-value.warning { color: #f59e0b; }
+        .metric-value.critical { color: #ef4444; }
+        .metric-value.success { color: #22c55e; }
+        .metric-label { color: #94a3b8; }
+        .alert {
+            padding: 1rem;
+            border-radius: 8px;
+            margin-bottom: 0.5rem;
+            font-size: 0.875rem;
+        }
+        .alert.critical { background: #7f1d1d; border: 1px solid #ef4444; }
+        .alert.warning { background: #78350f; border: 1px solid #f59e0b; }
+        .alert.info { background: #1e3a5f; border: 1px solid #38bdf8; }
+        .device-list {
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .device-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.5rem;
+            border-radius: 6px;
+            margin-bottom: 0.25rem;
+        }
+        .device-item:hover { background: #334155; }
+        .device-ip { font-family: monospace; }
+        .device-status {
+            font-size: 0.75rem;
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+        }
+        .device-status.online { background: #166534; color: #86efac; }
+        .device-status.offline { background: #7f1d1d; color: #fca5a5; }
+        .refresh-btn {
+            background: #38bdf8;
+            color: #0f172a;
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 500;
+        }
+        .refresh-btn:hover { background: #0ea5e9; }
+        .chart-placeholder {
+            height: 150px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #64748b;
+            background: #0f172a;
+            border-radius: 8px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🛡️ ClawSight Sentinel</h1>
+        <div class="status">
+            <div class="status-dot"></div>
+            <span>运行中</span>
+            <button class="refresh-btn" onclick="refreshData()">刷新</button>
+        </div>
+    </div>
+    
+    <div class="container">
+        <!-- 告警区域 -->
+        <div id="alerts"></div>
+        
+        <!-- 核心指标 -->
+        <div class="grid">
+            <div class="card">
+                <h2>📊 设备状态</h2>
+                <div class="metric">
+                    <span class="metric-label">在线设备</span>
+                    <span class="metric-value success" id="online-devices">-</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">离线设备</span>
+                    <span class="metric-value" id="offline-devices">-</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">总设备</span>
+                    <span class="metric-value" id="total-devices">-</span>
+                </div>
+            </div>
+            
+            <div class="card">
+                <h2>🌐 网络指标</h2>
+                <div class="metric">
+                    <span class="metric-label">丢包率</span>
+                    <span class="metric-value" id="packet-loss">-</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">平均延迟</span>
+                    <span class="metric-value" id="latency">-</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">带宽下行</span>
+                    <span class="metric-value" id="bandwidth-in">-</span>
+                </div>
+            </div>
+            
+            <div class="card">
+                <h2>📶 WiFi 状态</h2>
+                <div class="metric">
+                    <span class="metric-label">2.4G 设备</span>
+                    <span class="metric-value" id="wifi-2g">-</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">5G 设备</span>
+                    <span class="metric-value" id="wifi-5g">-</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">总连接数</span>
+                    <span class="metric-value" id="wifi-total">-</span>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 设备列表 -->
+        <div class="grid">
+            <div class="card">
+                <h2>🖥️ 在线设备</h2>
+                <div class="device-list" id="online-list"></div>
+            </div>
+            <div class="card">
+                <h2>📴 离线设备</h2>
+                <div class="device-list" id="offline-list"></div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        async function refreshData() {
+            try {
+                const resp = await fetch('/api/v2/metrics/full');
+                const data = await resp.json();
+                
+                const summary = data.summary;
+                
+                // 更新指标
+                document.getElementById('online-devices').textContent = summary.online_devices;
+                document.getElementById('offline-devices').textContent = summary.offline_devices;
+                document.getElementById('total-devices').textContent = summary.total_devices;
+                
+                // 网络指标
+                const plEl = document.getElementById('packet-loss');
+                plEl.textContent = summary.packet_loss + '%';
+                plEl.className = 'metric-value' + (summary.packet_loss > 1 ? ' warning' : '');
+                
+                document.getElementById('latency').textContent = summary.avg_latency_ms + ' ms';
+                document.getElementById('bandwidth-in').textContent = summary.bandwidth_in_mbps.toFixed(1) + ' Mbps';
+                
+                // WiFi
+                document.getElementById('wifi-2g').textContent = data.wifi_stats.band_2g_clients;
+                document.getElementById('wifi-5g').textContent = data.wifi_stats.band_5g_clients;
+                document.getElementById('wifi-total').textContent = data.wifi_stats.total_clients;
+                
+                // 告警
+                const alertsEl = document.getElementById('alerts');
+                alertsEl.innerHTML = summary.alerts.map(a => 
+                    `<div class="alert info">${a}</div>`
+                ).join('');
+                
+                // 设备列表
+                const devices = data.device_status.devices;
+                const online = devices.filter(d => d.status === 'online').slice(0, 10);
+                const offline = devices.filter(d => d.status === 'offline');
+                
+                document.getElementById('online-list').innerHTML = online.map(d => 
+                    `<div class="device-item"><span class="device-ip">${d.ip}</span><span class="device-status online">在线</span></div>`
+                ).join('') || '<div class="device-item">无</div>';
+                
+                document.getElementById('offline-list').innerHTML = offline.map(d => 
+                    `<div class="device-item"><span class="device-ip">${d.ip}</span><span class="device-status offline">离线</span></div>`
+                ).join('') || '<div class="device-item">无</div>';
+                
+            } catch (e) {
+                console.error(e);
+            }
+        }
+        
+        // 初始加载
+        refreshData();
+        // 每 30 秒刷新
+        setInterval(refreshData, 30000);
+    </script>
+</body>
+</html>
+"""
 
-@app.get("/agent/bootstrap")
-async def get_instruction():
-    lang = config.get("ui", {}).get("language", "zh-CN")
-    instructions = {
-        "zh-CN": """
-# 🛡️ ClawSight-Sentinel 网络守护系统
-您已成功接入 Sentinel 智控中枢。
-## 可用指令集:
-1. **环境监测**: `GET /api/v1/wifi/scan`
-2. **日志检索**: `GET /api/v1/logs`
-3. **智能诊断**: `POST /api/v1/ai/diagnose`
-4. **危机修复**: `POST /api/v1/fix/{script_id}`
-""",
-        "en-US": """
-# 🛡️ ClawSight-Sentinel Network Guardian
-1. `GET /api/v1/wifi/scan`
-2. `GET /api/v1/logs`
-3. `POST /api/v1/ai/diagnose`
-4. `POST /api/v1/fix/{script_id}`
-""",
-    }
-    return {"instruction": instructions.get(lang, instructions["en-US"]), "config": config}
-
-
-class SystemConfig(BaseModel):
-    cpu_affinity: Optional[List[int]] = None
-    ollama_model: Optional[str] = None
-    language: Optional[str] = None
-    scheduler_enabled: Optional[bool] = None
-    scheduler_frequency: Optional[int] = None
-    storage_path: Optional[str] = None
-
-
-class DiagnosisRequest(BaseModel):
-    logs: str
-
-
-@app.get("/api/v1/config")
-async def get_config():
-    return config
-
-
-@app.post("/api/v1/config")
-async def update_config(new_config: SystemConfig):
-    global config
-    if new_config.cpu_affinity:
-        config.setdefault("system", {}).setdefault("cpu_affinity", {})["cores"] = new_config.cpu_affinity
-    if new_config.ollama_model:
-        config.setdefault("system", {}).setdefault("resources", {}).setdefault("ollama", {})[
-            "default_model"
-        ] = new_config.ollama_model
-    if new_config.language:
-        config.setdefault("ui", {})["language"] = new_config.language
-    if new_config.scheduler_enabled is not None:
-        config.setdefault("analysis", {})["enabled"] = new_config.scheduler_enabled
-    if new_config.scheduler_frequency is not None:
-        config.setdefault("analysis", {})["frequency_minutes"] = new_config.scheduler_frequency
-    if new_config.storage_path is not None:
-        config.setdefault("storage", {})["log_path"] = new_config.storage_path
-    persist_config(config)
-    update_next_run()
-    return {"status": "updated", "config": config}
-
-
-@app.get("/api/v1/logs")
-async def fetch_logs(limit: int = Query(10, ge=1, le=50)):
-    return list_files(storage_dirs()["raw"], limit)
-
-
-@app.get("/api/v1/logs/{name}")
-async def fetch_log_content(name: str):
-    dirs = storage_dirs()
-    path = dirs["raw"] / name
-    if not path.exists():
-        raise HTTPException(status_code=404, detail="Log file not found")
-    return FileResponse(path, media_type="text/plain")
-
-
-@app.get("/api/v1/analysis")
-async def fetch_analysis(limit: int = Query(10, ge=1, le=30)):
-    return list_analyses(limit)
-
-
-@app.get("/api/v1/analysis/{name}")
-async def fetch_analysis_detail(name: str):
-    dirs = storage_dirs()
-    path = dirs["analysis"] / name
-    data = load_analysis_file(path)
-    if not data:
-        raise HTTPException(status_code=404, detail="Analysis entry not found")
-    return data
-
-
-@app.post("/api/v1/ai/diagnose")
-async def diagnose_logs(req: DiagnosisRequest):
-    model = (
-        config.get("system", {}).get("resources", {}).get("ollama", {}).get("default_model", "gemma:2b")
-    )
-    prompt = (
-        "You are a network expert. Analyze these OpenWrt logs and return: root cause, impact, and action plan.\n\n"
-        + req.logs[:6000]
-    )
-    try:
-        async with httpx.AsyncClient(timeout=180.0) as client:
-            response = await client.post(
-                f"{OLLAMA_HOST}/api/generate",
-                json={
-                    "model": model,
-                    "prompt": prompt,
-                    "stream": False,
-                    "options": {"num_predict": 50, "temperature": 0.1},
-                },
-            )
-            response.raise_for_status()
-            data = response.json()
-            diagnosis_text = data.get("response", "")
-    except Exception as exc:
-        diagnosis_text = f"本地模型暂不可用：{type(exc).__name__}: {exc}"
-    logs_count = len([line for line in req.logs.splitlines() if line.strip()])
-    entry = standardize_diagnosis(diagnosis_text, model, logs_count)
-    entry["raw_response"] = diagnosis_text
-    entry["logs_file"] = str(store_raw_log(req.logs))
-    store_analysis_entry(entry)
-    return {"model": model, "diagnosis": entry, "confidence": 0.8}
-
-
-@app.get("/api/v1/wifi/scan")
-async def wifi_scan():
-    return scan_wifi_interface()
-
-
-@app.get("/api/v1/wifi/analysis")
-async def wifi_analysis():
-    return build_wifi_analysis()
-
-
-@app.get("/api/v1/dashboard")
-async def dashboard():
-    return get_dashboard_snapshot()
-
-
-@app.get("/api/v1/scheduler/status")
-async def scheduler_status():
-    return {"enabled": config.get("analysis", {}).get("enabled", True), "frequency_minutes": config.get("analysis", {}).get("frequency_minutes", 5), "last_run": analysis_state.get("last_run"), "next_run": analysis_state.get("next_run"), "running": analysis_state.get("running", False)}
-
-
-class SchedulerConfig(BaseModel):
-    enabled: Optional[bool] = None
-    frequency_minutes: Optional[int] = None
-
-
-@app.post("/api/v1/scheduler/config")
-async def update_scheduler_config(cfg: SchedulerConfig):
-    global config
-    config.setdefault("analysis", {})
-    if cfg.enabled is not None:
-        config["analysis"]["enabled"] = cfg.enabled
-    if cfg.frequency_minutes is not None:
-        config["analysis"]["frequency_minutes"] = cfg.frequency_minutes
-    persist_config(config)
-    update_next_run()
-    return {"status": "updated", "config": config.get("analysis")}
-
-
-@app.post("/api/v1/scheduler/run")
-async def trigger_manual_analysis():
-    if analysis_state.get("running"):
-        return {"status": "already_running"}
-    asyncio.create_task(run_scheduled_analysis())
-    return {"status": "started"}
-
-
-@app.post("/api/v1/fix/{script_id}")
-async def trigger_fix(script_id: str):
-    scripts = config.get("automation", {}).get("scripts", [])
-    target = next((s for s in scripts if s.get("id") == script_id), None)
-    if not target:
-        raise HTTPException(status_code=404, detail="Script not found")
-    return {
-        "status": "queued",
-        "target": target.get("target"),
-        "actions": target.get("actions", []),
-        "note": "Playwright executor will run this action in worker service.",
-    }
+# 初始化
+init_services()

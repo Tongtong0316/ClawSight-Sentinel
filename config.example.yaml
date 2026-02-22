@@ -1,47 +1,25 @@
-system:
-  cpu_affinity:
-    enabled: true
-    cores: [4, 5, 6, 7]
-  resources:
-    ollama:
-      memory_limit: 3G
-      default_model: phi3:mini
+# ClawSight Sentinel v3.0 配置
 
+# OpenWrt 设备配置
+openwrt:
+  ip: "192.168.100.1"      # OpenWrt LAN IP
+  snmp_community: "public"  # SNMP 社区名
+  snmp_port: 161           # SNMP 端口
+
+# 存储配置
 storage:
-  log_path: /mnt/tf_card/sentinel_logs
-  retention:
-    days: 30
-    max_size_gb: 28
-  level: info
+  log_path: "/data/sentinel"  # 数据存储路径
+  retention_days: 30          # 日志保留天数
 
-wifi:
-  interfaces:
-    - name: wlan0_monitor
-      driver: rtl8812au
-      mode: monitor
-      band: 5g
-
-automation:
-  playwright:
-    headless: true
-    timeout_ms: 30000
-  scripts:
-    - id: openwrt_reboot
-      target: http://192.168.0.40
-      credentials: admin/password
-      actions: [login, system_reboot]
-
+# 分析配置
 analysis:
-  frequency_minutes: 5
-  max_logs_per_run: 2000
+  offline_threshold_minutes: 30  # 设备离线阈值(分钟)
+  packet_loss_warning: 1.0       # 丢包率警告阈值(%)
+  packet_loss_critical: 5.0       # 丢包率严重阈值(%)
+  latency_warning_ms: 100        # 延迟警告阈值(ms)
+  latency_critical_ms: 500       # 延迟严重阈值(ms)
 
-notifications:
-  enabled: false
-  webhook_url: ''
-
-ui:
-  language: zh-CN
-  theme: dark
-
-api:
-  agent_token: change_me_in_production
+# WebUI 配置
+webui:
+  port: 8080
+  title: "ClawSight Sentinel"

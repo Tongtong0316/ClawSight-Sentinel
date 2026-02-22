@@ -1,67 +1,21 @@
-version: '3'
+version: '3.8'
 
 services:
-  loki:
-    image: grafana/loki:latest
-    container_name: sentinel-loki
-    user: "0:0"
-    volumes:
-      - /mnt/tf_card/loki:/loki
-    command: -config.file=/etc/loki/local-config.yaml
-    mem_limit: 512m
-    restart: always
-    ports:
-      - "3100:3100"
-
-  promtail:
-    image: grafana/promtail:latest
-    container_name: sentinel-promtail
-    volumes:
-      - /var/log:/var/log:ro
-      - ./promtail-config.yml:/etc/promtail/config.yml:ro
-    command: -config.file=/etc/promtail/config.yml
-    restart: always
-
-  syslog-receiver:
+  sentinel:
     build:
       context: .
-      dockerfile: syslog_receiver.Dockerfile
-    container_name: sentinel-syslog
-    volumes:
-      - ./syslog_receiver.py:/app/receiver.py:ro
-      - /mnt/tf_card/sentinel:/mnt/tf_card/sentinel
-    environment:
-      - LOG_DIR=/mnt/tf_card/sentinel/raw_logs
-    command: python /app/receiver.py
+      dockerfile: sentinel_api/Dockerfile
+    image: clawsight-sentinel:latest
+    container_name: sentinel
     ports:
-      - "514:514/udp"
-    restart: always
-
-  ollama:
-    image: ollama/ollama:latest
-    container_name: sentinel-ollama
-    volumes:
-      - ollama_data:/root/.ollama
-    cpus: 2
-    mem_limit: 3g
-    restart: always
-
-  sentinel-api:
-    build:
-      context: ./sentinel_api
-    container_name: sentinel-api
-    privileged: true
-    volumes:
-      - /mnt/tf_card/sentinel:/mnt/tf_card/sentinel
-      - /mnt/tf_card/logs:/app/logs
-      - ./config.example.yaml:/mnt/tf_card/sentinel/config/config.yaml:rw
-      - /dev/bus/usb:/dev/bus/usb
-    ports:
-      - "8000:8000"
+      - "8080:8080"
     environment:
-      - TF_CARD_PATH=/app/logs
-      - OLLAMA_HOST=http://ollama:11434
-    restart: always
+      - SENTINEL_CONFIG=/data/sentinel/config/config.yaml
+    volumes:
+      - sentinel_data:/data/sentinel
+    restart: unless-stopped
+    network_mode: host
 
 volumes:
-  ollama_data:
+  sentinel_data:
+    driver: local
