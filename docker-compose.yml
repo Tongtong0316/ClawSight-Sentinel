@@ -2,6 +2,7 @@ services:
   loki:
     image: grafana/loki:latest
     container_name: sentinel-loki
+    user: "0:0"
     volumes:
       - /mnt/tf_card/loki:/loki
     command: -config.file=/etc/loki/local-config.yaml
@@ -13,8 +14,8 @@ services:
     image: grafana/promtail:latest
     container_name: sentinel-promtail
     volumes:
-      - /var/log:/var/log
-      - /etc/sentinel/promtail:/etc/promtail
+      - /var/log:/var/log:ro
+      - ./promtail-config.yml:/etc/promtail/config.yml:ro
     command: -config.file=/etc/promtail/config.yml
     restart: always
 
