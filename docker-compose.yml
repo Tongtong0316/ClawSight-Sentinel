@@ -1,3 +1,5 @@
+version: '3'
+
 services:
   loki:
     image: grafana/loki:latest
@@ -6,9 +8,10 @@ services:
     volumes:
       - /mnt/tf_card/loki:/loki
     command: -config.file=/etc/loki/local-config.yaml
-    cpuset: "0-1" # 限制在双核范围内
     mem_limit: 512m
     restart: always
+    ports:
+      - "3100:3100"
 
   promtail:
     image: grafana/promtail:latest
@@ -19,21 +22,30 @@ services:
     command: -config.file=/etc/promtail/config.yml
     restart: always
 
+  syslog-receiver:
+    image: python:3.11-slim
+    container_name: sentinel-syslog
+    volumes:
+      - ./syslog_receiver.py:/app/receiver.py:ro
+    command: python /app/receiver.py
+    ports:
+      - "514:514/udp"
+    restart: always
+
   ollama:
     image: ollama/ollama:latest
     container_name: sentinel-ollama
     volumes:
       - ollama_data:/root/.ollama
-    cpus: 1.5 # 限制 AI 核心，防止抢占
-    mem_limit: 5g
-    cpuset: "0-1"
+    cpus: 2
+    mem_limit: 3g
     restart: always
 
   sentinel-api:
     build:
       context: ./sentinel_api
     container_name: sentinel-api
-    privileged: true # 允许访问 USB WiFi
+    privileged: true
     volumes:
       - /mnt/tf_card/logs:/app/logs
       - ./config.example.yaml:/app/config/config.yaml:ro
