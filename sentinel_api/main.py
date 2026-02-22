@@ -23,7 +23,7 @@ app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 async def root():
     return FileResponse(BASE_DIR / "static" / "index.html")
 
-CONFIG_PATH = os.getenv("SENTINEL_CONFIG", "/app/config/config.yaml")
+CONFIG_PATH = os.getenv("SENTINEL_CONFIG", "/mnt/tf_card/sentinel/config/config.yaml")
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://ollama:11434")
 
 DEFAULT_CONFIG: Dict[str, Any] = {

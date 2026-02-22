@@ -49,8 +49,9 @@ services:
     container_name: sentinel-api
     privileged: true
     volumes:
+      - /mnt/tf_card/sentinel:/mnt/tf_card/sentinel
       - /mnt/tf_card/logs:/app/logs
-      - ./config.example.yaml:/app/config/config.yaml:ro
+      - ./config.example.yaml:/mnt/tf_card/sentinel/config/config.yaml:rw
       - /dev/bus/usb:/dev/bus/usb
     ports:
       - "8000:8000"
