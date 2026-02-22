@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>ClawSight Sentinel 控制台</title>
+  <style>
+    body { font-family: 'Segoe UI', sans-serif; background:#0f172a; color:#e2e8f0; margin:0; }
+    header { padding:1rem 2rem; background:#111827; display:flex; align-items:center; justify-content:space-between; }
+    main { padding:1.5rem 2rem; display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:1rem; }
+    section { background:#1f2937; border-radius:12px; padding:1.25rem; box-shadow:0 10px 30px rgba(15,23,42,.5); }
+    h2 { margin-top:0; font-size:1.2rem; }
+    button { border:none; background:#2563eb; color:#fff; padding:.6rem 1rem; border-radius:8px; cursor:pointer; font-weight:600; }
+    button:disabled { opacity:.6; cursor:not-allowed; }
+    label { display:block; margin-top:.5rem; font-size:.9rem; color:#cbd5f5; }
+    input[type=text], textarea, select { width:100%; padding:.5rem; margin-top:.25rem; background:#0f172a; color:#fff; border:1px solid #334155; border-radius:6px; }
+    .chip { background:#0f172a; border:1px solid #334155; border-radius:999px; padding:.25rem .75rem; display:inline-flex; align-items:center; margin-right:.25rem; }
+    .badge { font-size:.75rem; padding:.1rem .5rem; border-radius:999px; background:#1d4ed8; }
+    .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:.5rem; }
+    ul { padding-left:1rem; }
+    .log-entry { font-size:.9rem; border-bottom:1px solid #334155; padding:.35rem 0; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>ClawSight Sentinel</h1>
+      <p>网络守护 & AI 诊断中控</p>
+    </div>
+    <div>
+      <span id="statusBadge" class="badge">加载中...</span>
+    </div>
+  </header>
+  <main>
+    <section id="dashboardSection">
+      <h2>仪表盘</h2>
+      <div id="dashboardContent">加载中...</div>
+    </section>
+
+    <section>
+      <h2>设置</h2>
+      <label>CPU 核心 (逗号分隔)</label>
+      <input type="text" id="cpuInput" placeholder="例如 4,5" />
+      <label>默认模型</label>
+      <input type="text" id="modelInput" />
+      <label>界面语言</label>
+      <select id="languageInput">
+        <option value="zh-CN">中文</option>
+        <option value="en-US">English</option>
+      </select>
+      <button id="saveSettingsBtn">保存设置</button>
+      <div id="settingsFeedback"></div>
+    </section>
+
+    <section>
+      <h2>智能诊断</h2>
+      <textarea id="diagnosisInput" rows="4" placeholder="粘贴日志..."></textarea>
+      <button id="runDiagnosisBtn">运行诊断</button>
+      <pre id="diagnosisResult" style="white-space:pre-wrap;margin-top:.75rem;background:#0f172a;border:1px solid #334155;padding:.75rem;border-radius:8px;min-height:120px;"></pre>
+    </section>
+
+    <section>
+      <h2>最近分析</h2>
+      <div id="analysisList">加载中...</div>
+    </section>
+
+    <section>
+      <h2>日志浏览</h2>
+      <div id="logsList">加载中...</div>
+    </section>
+
+    <section>
+      <h2>WiFi 分析</h2>
+      <div id="wifiAnalysis">加载中...</div>
+    </section>
+
+    <section>
+      <h2>危机修复</h2>
+      <p>调度已配置剧本即可触发。</p>
+      <button id="refreshScriptsBtn">刷新脚本</button>
+      <div id="scriptsList">暂无脚本配置</div>
+    </section>
+  </main>
+
+  <script>
+    async function fetchJson(url, options) {
+      const res = await fetch(url, options);
+      if (!res.ok) throw new Error(await res.text());
+      return typeof res.json === 'function' ? res.json() : res.text();
+    }
+
+    async function refreshDashboard() {
+      try {
+        const data = await fetchJson('/api/v1/dashboard');
+        document.getElementById('statusBadge').textContent = '在线';
+        const logs = data.logs.map(item => `· ${item.name} (${(item.size / 1024).toFixed(1)} KB)`).join('<br/>');
+        const analysis = data.analysis.map(item => `· ${item.summary}`).join('<br/>');
+        document.getElementById('dashboardContent').innerHTML = `
+          <div class="grid">
+            <div class="chip">${data.config.system.resources.ollama.default_model}</div>
+            <div class="chip">CPU: ${data.config.system.cpu_affinity.cores.join(',')}</div>
+          </div>
+          <p><strong>最新原始日志：</strong><br/>${logs || '暂无'}</p>
+          <p><strong>最新分析：</strong><br/>${analysis || '暂无'}</p>
+        `;
+      } catch (err) {
+        document.getElementById('dashboardContent').textContent = err.message;
+      }
+    }
+
+    async function refreshSettings() {
+      const conf = await fetchJson('/api/v1/config');
+      document.getElementById('cpuInput').value = (conf.system.cpu_affinity.cores || []).join(',');
+      document.getElementById('modelInput').value = conf.system.resources.ollama.default_model;
+      document.getElementById('languageInput').value = conf.ui.language;
+    }
+
+    document.getElementById('saveSettingsBtn').addEventListener('click', async () => {
+      const cores = document.getElementById('cpuInput').value.split(',').map(v => parseInt(v.trim(), 10)).filter(Boolean);
+      const payload = {
+        cpu_affinity: cores,
+        ollama_model: document.getElementById('modelInput').value || undefined,
+        language: document.getElementById('languageInput').value,
+      };
+      try {
+        await fetchJson('/api/v1/config', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(payload),
+        });
+        document.getElementById('settingsFeedback').textContent = '保存成功';
+        refreshDashboard();
+      } catch (err) {
+        document.getElementById('settingsFeedback').textContent = '保存失败: ' + err.message;
+      }
+    });
+
+    document.getElementById('runDiagnosisBtn').addEventListener('click', async () => {
+      const input = document.getElementById('diagnosisInput').value;
+      if (!input.trim()) return;
+      document.getElementById('diagnosisResult').textContent = '分析中...';
+      try {
+        const result = await fetchJson('/api/v1/ai/diagnose', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({logs: input}),
+        });
+        document.getElementById('diagnosisResult').textContent = JSON.stringify(result.diagnosis, null, 2);
+        refreshAnalysis();
+        refreshLogs();
+      } catch (err) {
+        document.getElementById('diagnosisResult').textContent = err.message;
+      }
+    });
+
+    async function refreshAnalysis() {
+      const items = await fetchJson('/api/v1/analysis');
+      document.getElementById('analysisList').innerHTML = items
+        .map(item => `<div class="log-entry"><strong>${item.summary}</strong><br/>${item.issues[0]?.description || ''}</div>`)
+        .join('') || '<p>暂无分析</p>';
+    }
+
+    async function refreshLogs() {
+      const items = await fetchJson('/api/v1/logs');
+      document.getElementById('logsList').innerHTML = items
+        .map(item => `<div class="log-entry"><strong>${item.name}</strong><br/>${item.mtime}</div>`)
+        .join('') || '<p>暂无日志</p>';
+    }
+
+    async function refreshWifi() {
+      const data = await fetchJson('/api/v1/wifi/analysis');
+      document.getElementById('wifiAnalysis').innerHTML = `
+        <p><strong>接口：</strong>${data.interface || 'unknown'}</p>
+        <p><strong>信号：</strong>${data.analysis.signal_strength.current_dbm} dBm</p>
+        <p><strong>邻居：</strong>${data.analysis.neighbors.map(n => `${n.ssid} (${n.signal}dBm)`).join(', ')}</p>
+        <p><strong>问题：</strong>${data.analysis.issues[0].description}</p>
+      `;
+    }
+
+    async function refreshScripts() {
+      const cfg = await fetchJson('/api/v1/config');
+      const scripts = cfg.automation.scripts || [];
+      document.getElementById('scriptsList').innerHTML = scripts.map(s => `<button onclick="triggerFix('${s.id}')">${s.id}</button>`).join('') || '<p>暂无剧本</p>';
+    }
+
+    window.triggerFix = async function (scriptId) {
+      await fetchJson(`/api/v1/fix/${scriptId}`, {method: 'POST'});
+      alert('已触发 ' + scriptId);
+    };
+
+    document.getElementById('refreshScriptsBtn').addEventListener('click', refreshScripts);
+
+    async function init() {
+      await refreshDashboard();
+      await refreshSettings();
+      await refreshAnalysis();
+      await refreshLogs();
+      await refreshWifi();
+      await refreshScripts();
+    }
+
+    init();
+  </script>
+</body>
+</html>

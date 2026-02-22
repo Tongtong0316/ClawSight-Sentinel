@@ -31,6 +31,14 @@ automation:
       credentials: admin/password
       actions: [login, system_reboot]
 
+analysis:
+  frequency_minutes: 5
+  max_logs_per_run: 2000
+
+notifications:
+  enabled: false
+  webhook_url: ''
+
 ui:
   language: zh-CN
   theme: dark
