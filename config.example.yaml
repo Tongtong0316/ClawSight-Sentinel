@@ -1,0 +1,113 @@
+# Sentinel 配置参数 (Configuration Guide)
+
+本系统支持通过 YAML 配置文件或 WebUI 进行深度定制。
+
+## 1. 核心性能设置 (Performance)
+
+```yaml
+system:
+  # CPU 核心亲和性设置 (PVE/N305 专用)
+  cpu_affinity:
+    # 强制 Sentinel 系统仅使用特定的 CPU 核心
+    # 保留核心 0-3 给 OpenWrt NAT 使用，推荐 Sentinel 使用 4-7
+    enabled: true
+    cores: [4, 5, 6, 7] 
+
+  # 内存与资源限制
+  resources:
+    ollama:
+      memory_limit: 3G
+      # 可选模型: deepseek-r1:1.5b, llama3:8b, phi3:mini
+      default_model: "deepseek-r1:1.5b" 
+```
+
+## 2. 存储与日志 (Storage)
+
+```yaml
+storage:
+  # 日志存储路径 (支持 TF 卡挂载点)
+  log_path: "/mnt/tf_card/sentinel_logs"
+  
+  # 日志保留策略
+  retention:
+    days: 30          # 保留天数
+    max_size_gb: 28 # 最大占用空间 (TF 卡推荐 32G)
+  
+  # 日志级别
+  level: "info"     # debug, info, warn, error
+```
+
+## 3. 无线接入设置 (WiFi Profiles)
+
+```yaml
+wifi:
+  # 无线设备选择 (不限于一种)
+  interfaces:
+    - name: "wlan0_monitor"
+      driver: "rtl8812au"     # 当前驱动: Realtek RTL8812AU
+      mode: "monitor"          # 监听模式
+      band: "5g"              # 频段: 2.4g, 5g, both
+      
+    # 预留: 支持更多 USB 网卡
+    # - name: "wlan1_client"
+    #   driver: "mt7601u"
+    #   mode: "managed"
+```
+
+## 4. 自动化与修复 (Automation)
+
+```yaml
+automation:
+  # WebUI 自动化配置
+  playwright:
+    headless: true     # 无头模式运行
+    timeout_ms: 30000
+    
+  # 危机修复脚本库
+  scripts:
+    - id: "openwrt_reboot"
+      target: "http://192.168.0.40"
+      credentials: "admin/password"
+      actions: ["login", "system_reboot"]
+      
+    - id: "modem_recovery"
+      target: "http://192.168.1.1"
+      # ... 光猫配置
+```
+
+## 5. 接口与多语言 (i18n)
+
+```yaml
+ui:
+  language: "zh-CN"   # 支持: zh-CN, en-US
+  theme: "dark"       # dark, light
+  
+api:
+  # Agent 接口配置
+  agent_token: "change_me_in_production"
+```
+
+---
+
+## 📡 Agent 接入指南
+
+任何 AI Agent (如 Antigravity, OpenAI, Claude) 均可通过以下流程接入：
+
+### 1. 发现系统 (Bootstrap)
+Agent 发送 GET 请求至:
+`http://<SENTINEL_IP>:8000/agent/bootstrap`
+
+系统将返回包含以下能力的 Markdown 指令集：
+*   `GET /api/v1/logs` - 获取日志
+*   `GET /api/v1/wifi/scan` - 获取 WiFi 质量报告
+*   `POST /api/v1/ai/diagnose` - 提交日志片段进行 AI 诊断
+*   `POST /api/v1/fix/{script_id}` - 触发设备重启/恢复
+
+### 2. 诊断流程
+Agent 应遵循以下最佳实践：
+1.  **Check WiFi Health**: 先通过 `/wifi/scan` 确认物理层是否有干扰。
+2.  **Fetch Logs**: 调阅最近的 `/logs`，寻找 `error` 或 `failed` 关键字。
+3.  **AI Inference**: 将日志片段 POST 至 `/ai/diagnose`，由本地大模型给出专业建议。
+4.  **Execute Fix**: 如果确认危机且无法 SSH 修复，调用 `/fix/openwrt_reboot`。
+
+---
