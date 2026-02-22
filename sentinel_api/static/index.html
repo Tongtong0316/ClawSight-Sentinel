@@ -2,238 +2,242 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
-  <title>ClawSight Sentinel 控制台</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ClawSight Sentinel - 网络监控中心</title>
   <style>
-    body { font-family: 'Segoe UI', sans-serif; background:#0f172a; color:#e2e8f0; margin:0; }
-    header { padding:1rem 2rem; background:#111827; display:flex; align-items:center; justify-content:space-between; }
-    main { padding:1.5rem 2rem; display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:1rem; }
-    section { background:#1f2937; border-radius:12px; padding:1.25rem; box-shadow:0 10px 30px rgba(15,23,42,.5); }
-    h2 { margin-top:0; font-size:1.2rem; }
-    button { border:none; background:#2563eb; color:#fff; padding:.6rem 1rem; border-radius:8px; cursor:pointer; font-weight:600; }
-    button:disabled { opacity:.6; cursor:not-allowed; }
-    label { display:block; margin-top:.5rem; font-size:.9rem; color:#cbd5f5; }
-    input[type=text], textarea, select { width:100%; padding:.5rem; margin-top:.25rem; background:#0f172a; color:#fff; border:1px solid #334155; border-radius:6px; }
-    .chip { background:#0f172a; border:1px solid #334155; border-radius:999px; padding:.25rem .75rem; display:inline-flex; align-items:center; margin-right:.25rem; }
-    .badge { font-size:.75rem; padding:.1rem .5rem; border-radius:999px; background:#1d4ed8; }
-    .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:.5rem; }
-    ul { padding-left:1rem; }
-    .log-entry { font-size:.9rem; border-bottom:1px solid #334155; padding:.35rem 0; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      min-height: 100vh;
+    }
+    .header {
+      background: #1e293b;
+      padding: 1.25rem 2rem;
+      border-bottom: 1px solid #334155;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .header h1 { font-size: 1.5rem; color: #38bdf8; }
+    .header .status { display: flex; align-items: center; gap: 0.5rem; }
+    .status-dot { width: 10px; height: 10px; border-radius: 50%; background: #22c55e; animation: pulse 2s infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+    .container { max-width: 1400px; margin: 0 auto; padding: 1.5rem; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1.5rem; margin-bottom: 1.5rem; }
+    .card {
+      background: #1e293b;
+      border-radius: 12px;
+      padding: 1.25rem;
+      border: 1px solid #334155;
+    }
+    .card h2 { font-size: 0.875rem; color: #94a3b8; margin-bottom: 1rem; text-transform: uppercase; letter-spacing: 0.05em; }
+    .metric { display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 0; border-bottom: 1px solid #334155; }
+    .metric:last-child { border-bottom: none; }
+    .metric-value { font-size: 1.5rem; font-weight: 600; color: #38bdf8; }
+    .metric-value.warning { color: #f59e0b; }
+    .metric-value.critical { color: #ef4444; }
+    .metric-value.success { color: #22c55e; }
+    .metric-label { color: #94a3b8; }
+    .alert { padding: 1rem; border-radius: 8px; margin-bottom: 0.5rem; font-size: 0.875rem; }
+    .alert.critical { background: #7f1d1d; border: 1px solid #ef4444; }
+    .alert.warning { background: #78350f; border: 1px solid #f59e0b; }
+    .alert.info { background: #1e3a5f; border: 1px solid #38bdf8; }
+    .device-list { max-height: 300px; overflow-y: auto; }
+    .device-item { display: flex; justify-content: space-between; align-items: center; padding: 0.5rem; border-radius: 6px; margin-bottom: 0.25rem; }
+    .device-item:hover { background: #334155; }
+    .device-ip { font-family: monospace; }
+    .device-status { font-size: 0.75rem; padding: 0.25rem 0.5rem; border-radius: 4px; }
+    .device-status.online { background: #166534; color: #86efac; }
+    .device-status.offline { background: #7f1d1d; color: #fca5a5; }
+    .refresh-btn { background: #38bdf8; color: #0f172a; border: none; padding: 0.5rem 1rem; border-radius: 6px; cursor: pointer; font-weight: 500; }
+    .refresh-btn:hover { background: #0ea5e9; }
+    .api-card { background: #0f172a; padding: 1rem; border-radius: 8px; margin-bottom: 0.5rem; }
+    .api-card code { color: #38bdf8; font-size: 0.85rem; }
+    .api-card p { color: #94a3b8; font-size: 0.85rem; margin-top: 0.25rem; }
+    .info-box { background: #1e3a5f; border: 1px solid #38bdf8; border-radius: 8px; padding: 1rem; margin-bottom: 1rem; }
+    .info-box h3 { color: #38bdf8; font-size: 1rem; margin-bottom: 0.5rem; }
+    .info-box p { color: #cbd5f5; font-size: 0.9rem; }
+    .btn-group { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+    .btn { background: #334155; color: #fff; border: none; padding: 0.5rem 1rem; border-radius: 6px; cursor: pointer; font-size: 0.85rem; }
+    .btn:hover { background: #475569; }
+    .btn-primary { background: #2563eb; }
+    .btn-primary:hover { background: #1d4ed8; }
   </style>
 </head>
 <body>
-  <header>
+  <div class="header">
     <div>
-      <h1>ClawSight Sentinel</h1>
-      <p>网络守护 & AI 诊断中控</p>
+      <h1>🛡️ ClawSight Sentinel</h1>
+      <p style="color:#94a3b8;font-size:0.9rem;margin-top:0.25rem;">网络监控中心 - API 驱动架构</p>
     </div>
-    <div>
-      <span id="statusBadge" class="badge">加载中...</span>
+    <div class="status">
+      <div class="status-dot"></div>
+      <span>运行中</span>
+      <button class="refresh-btn" onclick="refreshData()">刷新</button>
     </div>
-  </header>
-  <main>
-    <section id="dashboardSection">
-      <h2>仪表盘</h2>
-      <div id="dashboardContent">加载中...</div>
-    </section>
+  </div>
 
-    <section>
-      <h2>设置</h2>
-      <label>CPU 核心 (逗号分隔)</label>
-      <input type="text" id="cpuInput" placeholder="例如 4,5" />
-      <label>默认模型</label>
-      <input type="text" id="modelInput" />
-      <label>界面语言</label>
-      <select id="languageInput">
-        <option value="zh-CN">中文</option>
-        <option value="en-US">English</option>
-      </select>
-      <button id="saveSettingsBtn">保存设置</button>
-      <div id="settingsFeedback"></div>
-    </section>
+  <div class="container">
+    <!-- 架构说明 -->
+    <div class="info-box">
+      <h3>📡 架构说明</h3>
+      <p>本系统采用 <strong>API 驱动架构</strong>，不运行本地大模型。网络分析由外部 Agent 调用 API 完成。</p>
+      <p style="margin-top:0.5rem;">外部 Agent 可通过 <code>/agent/guide</code> 获取完整接入指南。</p>
+    </div>
 
-    <section>
-      <h2>智能诊断</h2>
-      <textarea id="diagnosisInput" rows="4" placeholder="粘贴日志..."></textarea>
-      <button id="runDiagnosisBtn">运行诊断</button>
-      <pre id="diagnosisResult" style="white-space:pre-wrap;margin-top:.75rem;background:#0f172a;border:1px solid #334155;padding:.75rem;border-radius:8px;min-height:120px;"></pre>
-    </section>
+    <!-- 核心指标 -->
+    <div class="grid">
+      <div class="card">
+        <h2>📊 设备状态</h2>
+        <div class="metric">
+          <span class="metric-label">在线设备</span>
+          <span class="metric-value success" id="online-devices">-</span>
+        </div>
+        <div class="metric">
+          <span class="metric-label">离线设备</span>
+          <span class="metric-value" id="offline-devices">-</span>
+        </div>
+        <div class="metric">
+          <span class="metric-label">总设备</span>
+          <span class="metric-value" id="total-devices">-</span>
+        </div>
+      </div>
 
-    <section>
-      <h2>最近分析</h2>
-      <div id="analysisList">加载中...</div>
-    </section>
+      <div class="card">
+        <h2>🌐 网络指标</h2>
+        <div class="metric">
+          <span class="metric-label">丢包率</span>
+          <span class="metric-value" id="packet-loss">-</span>
+        </div>
+        <div class="metric">
+          <span class="metric-label">平均延迟</span>
+          <span class="metric-value" id="latency">-</span>
+        </div>
+        <div class="metric">
+          <span class="metric-label">带宽下行</span>
+          <span class="metric-value" id="bandwidth-in">-</span>
+        </div>
+      </div>
 
-    <section>
-      <h2>日志浏览</h2>
-      <div id="logsList">加载中...</div>
-    </section>
+      <div class="card">
+        <h2>📶 WiFi 状态</h2>
+        <div class="metric">
+          <span class="metric-label">2.4G 设备</span>
+          <span class="metric-value" id="wifi-2g">-</span>
+        </div>
+        <div class="metric">
+          <span class="metric-label">5G 设备</span>
+          <span class="metric-value" id="wifi-5g">-</span>
+        </div>
+        <div class="metric">
+          <span class="metric-label">总连接数</span>
+          <span class="metric-value" id="wifi-total">-</span>
+        </div>
+      </div>
+    </div>
 
-    <section>
-      <h2>WiFi 分析</h2>
-      <div id="wifiAnalysis">加载中...</div>
-    </section>
+    <!-- API 快速访问 -->
+    <div class="grid">
+      <div class="card">
+        <h2>🔌 API 快速访问</h2>
+        <div class="api-card">
+          <code>GET /api/v2/metrics/summary</code>
+          <p>网络健康摘要</p>
+        </div>
+        <div class="api-card">
+          <code>GET /api/v2/narrator/report</code>
+          <p>完整分析报告（自然语言）</p>
+        </div>
+        <div class="api-card">
+          <code>GET /api/v2/wifi/scan</code>
+          <p>WiFi 环境扫描</p>
+        </div>
+        <div class="api-card">
+          <code>GET /agent/guide</code>
+          <p>Agent 接入指南</p>
+        </div>
+      </div>
 
-    <section>
-      <h2>定时分析</h2>
-      <label>启用</label>
-      <select id="schedulerEnabled">
-        <option value="true">启用</option>
-        <option value="false">禁用</option>
-      </select>
-      <label>频率 (分钟)</label>
-      <input type="number" id="schedulerFreq" min="1" max="60" />
-      <button id="saveSchedulerBtn">保存</button>
-      <div id="schedulerStatus" style="margin-top:.5rem;font-size:.85rem;color:#94a3b8;"></div>
-    </section>
+      <!-- 告警区域 -->
+      <div class="card">
+        <h2>⚠️ 告警</h2>
+        <div id="alerts"></div>
+      </div>
+    </div>
 
-    <section>
-      <h2>危机修复</h2>
-      <p>调度已配置剧本即可触发。</p>
-      <button id="refreshScriptsBtn">刷新脚本</button>
-      <div id="scriptsList">暂无脚本配置</div>
-    </section>
-  </main>
+    <!-- 设备列表 -->
+    <div class="grid">
+      <div class="card">
+        <h2>🖥️ 在线设备</h2>
+        <div class="device-list" id="online-list"></div>
+      </div>
+      <div class="card">
+        <h2>📴 离线设备</h2>
+        <div class="device-list" id="offline-list"></div>
+      </div>
+    </div>
+  </div>
 
   <script>
-    async function fetchJson(url, options) {
-      const res = await fetch(url, options);
-      if (!res.ok) throw new Error(await res.text());
-      return typeof res.json === 'function' ? res.json() : res.text();
-    }
-
-    async function refreshDashboard() {
+    async function refreshData() {
       try {
-        const data = await fetchJson('/api/v1/dashboard');
-        document.getElementById('statusBadge').textContent = '在线';
-        const logs = data.logs.map(item => `· ${item.name} (${(item.size / 1024).toFixed(1)} KB)`).join('<br/>');
-        const analysis = data.analysis.map(item => `· ${item.summary}`).join('<br/>');
-        document.getElementById('dashboardContent').innerHTML = `
-          <div class="grid">
-            <div class="chip">${data.config.system.resources.ollama.default_model}</div>
-            <div class="chip">CPU: ${data.config.system.cpu_affinity.cores.join(',')}</div>
-          </div>
-          <p><strong>最新原始日志：</strong><br/>${logs || '暂无'}</p>
-          <p><strong>最新分析：</strong><br/>${analysis || '暂无'}</p>
-        `;
-      } catch (err) {
-        document.getElementById('dashboardContent').textContent = err.message;
+        const resp = await fetch('/api/v2/metrics/full');
+        const data = await resp.json();
+
+        const summary = data.summary || {};
+
+        // 更新指标
+        document.getElementById('online-devices').textContent = summary.online_devices || 0;
+        document.getElementById('offline-devices').textContent = summary.offline_devices || 0;
+        document.getElementById('total-devices').textContent = summary.total_devices || 0;
+
+        // 网络指标
+        const plEl = document.getElementById('packet-loss');
+        plEl.textContent = (summary.packet_loss || 0) + '%';
+        plEl.className = 'metric-value' + ((summary.packet_loss || 0) > 1 ? ' warning' : '');
+
+        document.getElementById('latency').textContent = (summary.avg_latency_ms || 0) + ' ms';
+        document.getElementById('bandwidth-in').textContent = (summary.bandwidth_in_mbps || 0).toFixed(1) + ' Mbps';
+
+        // WiFi
+        const wifi = data.wifi_stats || {};
+        document.getElementById('wifi-2g').textContent = wifi.band_2g_clients || 0;
+        document.getElementById('wifi-5g').textContent = wifi.band_5g_clients || 0;
+        document.getElementById('wifi-total').textContent = wifi.total_clients || 0;
+
+        // 告警
+        const alertsEl = document.getElementById('alerts');
+        const alerts = summary.alerts || [];
+        if (alerts.length > 0) {
+          alertsEl.innerHTML = alerts.map(a => `<div class="alert info">${a}</div>`).join('');
+        } else {
+          alertsEl.innerHTML = '<div class="alert info">网络运行正常</div>';
+        }
+
+        // 设备列表
+        const devices = data.device_status?.devices || [];
+        const online = devices.filter(d => d.status === 'online').slice(0, 10);
+        const offline = devices.filter(d => d.status === 'offline');
+
+        document.getElementById('online-list').innerHTML = online.map(d =>
+          `<div class="device-item"><span class="device-ip">${d.ip}</span><span class="device-status online">在线</span></div>`
+        ).join('') || '<div style="color:#94a3b8;">无</div>';
+
+        document.getElementById('offline-list').innerHTML = offline.map(d =>
+          `<div class="device-item"><span class="device-ip">${d.ip}</span><span class="device-status offline">离线</span></div>`
+        ).join('') || '<div style="color:#94a3b8;">无</div>';
+
+      } catch (e) {
+        console.error(e);
       }
     }
 
-    async function refreshSettings() {
-      const conf = await fetchJson('/api/v1/config');
-      document.getElementById('cpuInput').value = (conf.system.cpu_affinity.cores || []).join(',');
-      document.getElementById('modelInput').value = conf.system.resources.ollama.default_model;
-      document.getElementById('languageInput').value = conf.ui.language;
-    }
-
-    document.getElementById('saveSettingsBtn').addEventListener('click', async () => {
-      const cores = document.getElementById('cpuInput').value.split(',').map(v => parseInt(v.trim(), 10)).filter(Boolean);
-      const payload = {
-        cpu_affinity: cores,
-        ollama_model: document.getElementById('modelInput').value || undefined,
-        language: document.getElementById('languageInput').value,
-      };
-      try {
-        await fetchJson('/api/v1/config', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify(payload),
-        });
-        document.getElementById('settingsFeedback').textContent = '保存成功';
-        refreshDashboard();
-      } catch (err) {
-        document.getElementById('settingsFeedback').textContent = '保存失败: ' + err.message;
-      }
-    });
-
-    document.getElementById('runDiagnosisBtn').addEventListener('click', async () => {
-      const input = document.getElementById('diagnosisInput').value;
-      if (!input.trim()) return;
-      document.getElementById('diagnosisResult').textContent = '分析中...';
-      try {
-        const result = await fetchJson('/api/v1/ai/diagnose', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({logs: input}),
-        });
-        document.getElementById('diagnosisResult').textContent = JSON.stringify(result.diagnosis, null, 2);
-        refreshAnalysis();
-        refreshLogs();
-      } catch (err) {
-        document.getElementById('diagnosisResult').textContent = err.message;
-      }
-    });
-
-    async function refreshAnalysis() {
-      const items = await fetchJson('/api/v1/analysis');
-      document.getElementById('analysisList').innerHTML = items
-        .map(item => `<div class="log-entry"><strong>${item.summary}</strong><br/>${item.issues[0]?.description || ''}</div>`)
-        .join('') || '<p>暂无分析</p>';
-    }
-
-    async function refreshLogs() {
-      const items = await fetchJson('/api/v1/logs');
-      document.getElementById('logsList').innerHTML = items
-        .map(item => `<div class="log-entry"><strong>${item.name}</strong><br/>${item.mtime}</div>`)
-        .join('') || '<p>暂无日志</p>';
-    }
-
-    async function refreshWifi() {
-      const data = await fetchJson('/api/v1/wifi/analysis');
-      document.getElementById('wifiAnalysis').innerHTML = `
-        <p><strong>接口：</strong>${data.interface || 'unknown'}</p>
-        <p><strong>信号：</strong>${data.analysis.signal_strength.current_dbm} dBm</p>
-        <p><strong>邻居：</strong>${data.analysis.neighbors.map(n => `${n.ssid} (${n.signal}dBm)`).join(', ')}</p>
-        <p><strong>问题：</strong>${data.analysis.issues[0].description}</p>
-      `;
-    }
-
-    async function refreshScripts() {
-      const cfg = await fetchJson('/api/v1/config');
-      const scripts = cfg.automation.scripts || [];
-      document.getElementById('scriptsList').innerHTML = scripts.map(s => `<button onclick="triggerFix('${s.id}')">${s.id}</button>`).join('') || '<p>暂无剧本</p>';
-    }
-
-    window.triggerFix = async function (scriptId) {
-      await fetchJson(`/api/v1/fix/${scriptId}`, {method: 'POST'});
-      alert('已触发 ' + scriptId);
-    };
-
-    document.getElementById('refreshScriptsBtn').addEventListener('click', refreshScripts);
-
-    async function refreshScheduler() {
-      const data = await fetchJson('/api/v1/scheduler/status');
-      document.getElementById('schedulerEnabled').value = String(data.enabled);
-      document.getElementById('schedulerFreq').value = data.frequency_minutes;
-      const last = data.last_run ? new Date(data.last_run).toLocaleString() : '从未';
-      const next = data.next_run ? new Date(data.next_run).toLocaleString() : '已禁用';
-      document.getElementById('schedulerStatus').innerHTML = '上次: ' + last + '<br/>下次: ' + next + '<br/>状态: ' + (data.running ? '运行中' : '空闲');
-    }
-
-    document.getElementById('saveSchedulerBtn').addEventListener('click', async () => {
-      const enabled = document.getElementById('schedulerEnabled').value === 'true';
-      const freq = parseInt(document.getElementById('schedulerFreq').value, 10);
-      await fetchJson('/api/v1/config', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({scheduler_enabled: enabled, scheduler_frequency: freq}),
-      });
-      refreshScheduler();
-      refreshDashboard();
-    });
-
-    async function init() {
-      await refreshDashboard();
-      await refreshSettings();
-      await refreshAnalysis();
-      await refreshLogs();
-      await refreshWifi();
-      await refreshScripts();
-      await refreshScheduler();
-    }
-
-    init();
+    // 初始加载
+    refreshData();
+    // 每 30 秒刷新
+    setInterval(refreshData, 30000);
   </script>
 </body>
 </html>
