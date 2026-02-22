@@ -16,7 +16,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "ui": {"language": "zh-CN"},
     "system": {
         "cpu_affinity": {"enabled": True, "cores": [0, 1]},
-        "resources": {"ollama": {"default_model": "deepseek-r1:1.5b"}},
+        "resources": {"ollama": {"default_model": "tinyllama"}},
     },
     "wifi": {
         "interfaces": [
