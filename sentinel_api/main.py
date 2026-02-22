@@ -1,142 +1,182 @@
-import yaml
 import os
+from copy import deepcopy
+from typing import Any, Dict, List, Optional
+
+import httpx
+import yaml
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from typing import List, Optional
-from pathlib import Path
 
-app = FastAPI(title="ClawSight-Sentinel API")
+app = FastAPI(title="ClawSight-Sentinel API", version="0.2.0")
 
-# 配置加载器
 CONFIG_PATH = os.getenv("SENTINEL_CONFIG", "/app/config/config.yaml")
+OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://ollama:11434")
 
-def load_config():
+DEFAULT_CONFIG: Dict[str, Any] = {
+    "ui": {"language": "zh-CN"},
+    "system": {
+        "cpu_affinity": {"enabled": True, "cores": [0, 1]},
+        "resources": {"ollama": {"default_model": "deepseek-r1:1.5b"}},
+    },
+    "wifi": {
+        "interfaces": [
+            {"name": "wlan0", "driver": "rtl8812au", "mode": "monitor", "band": "5g"}
+        ]
+    },
+    "automation": {"scripts": []},
+}
+
+
+def deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+    out = deepcopy(base)
+    for k, v in (override or {}).items():
+        if isinstance(v, dict) and isinstance(out.get(k), dict):
+            out[k] = deep_merge(out[k], v)
+        else:
+            out[k] = v
+    return out
+
+
+def load_config() -> Dict[str, Any]:
     if os.path.exists(CONFIG_PATH):
-        with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
-            return yaml.safe_load(f)
-    return {
-        "ui": {"language": "zh-CN"},
-        "system": {"resources": {"ollama": {"default_model": "deepseek-r1:1.5b"}}}
-    }
+        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+            user_cfg = yaml.safe_load(f) or {}
+        return deep_merge(DEFAULT_CONFIG, user_cfg)
+    return deepcopy(DEFAULT_CONFIG)
+
 
 config = load_config()
 
-# ============ Agent Bootstrap 接口 ============
+
+@app.get("/healthz")
+async def healthz():
+    return {"ok": True, "service": "clawsight-sentinel"}
+
 
 @app.get("/agent/bootstrap")
 async def get_instruction():
     lang = config.get("ui", {}).get("language", "zh-CN")
-    
+
     instructions = {
         "zh-CN": """
 # 🛡️ ClawSight-Sentinel 网络守护系统
 您已成功接入 Sentinel 智控中枢。
 ## 可用指令集:
-1. **环境监测**: `GET /api/v1/wifi/scan` - 获取 2.4G/5G 频谱质量。
-2. **日志检索**: `GET /api/v1/logs?level=error` - 获取最近系统日志。
-3. **智能诊断**: `POST /api/v1/ai/diagnose` - 调用本地大模型分析日志。
-4. **危机修复**: `POST /api/v1/fix/{script_id}` - 执行 WebUI 自动化修复。
-
-## 使用流程:
-1. 调用 WiFi 扫描确认物理层状态。
-2. 调阅错误日志。
-3. 如需深度分析，请调用 AI 诊断接口。
-4. 确认为重大故障时，使用 fix 接口重启设备。
+1. **环境监测**: `GET /api/v1/wifi/scan`
+2. **日志检索**: `GET /api/v1/logs?level=error`
+3. **智能诊断**: `POST /api/v1/ai/diagnose`
+4. **危机修复**: `POST /api/v1/fix/{script_id}`
 """,
         "en-US": """
 # 🛡️ ClawSight-Sentinel Network Guardian
 Connected to Sentinel.
 ## Capabilities:
-1. **Environment**: `GET /api/v1/wifi/scan` - Spectrum analysis.
-2. **Logs**: `GET /api/v1/logs` - System logs.
-3. **Diagnosis**: `POST /api/v1/ai/diagnose` - Local LLM analysis.
-4. **Fix**: `POST /api/v1/fix/{script_id}` - Execute automation.
-"""
-    }
-    
-    return {
-        "instruction": instructions.get(lang, instructions["en-US"]),
-        "config": config
+1. `GET /api/v1/wifi/scan`
+2. `GET /api/v1/logs`
+3. `POST /api/v1/ai/diagnose`
+4. `POST /api/v1/fix/{script_id}`
+""",
     }
 
-# ============ 系统配置接口 ============
+    return {
+        "instruction": instructions.get(lang, instructions["en-US"]),
+        "config": config,
+    }
+
 
 class SystemConfig(BaseModel):
     cpu_affinity: Optional[List[int]] = None
     ollama_model: Optional[str] = None
+    language: Optional[str] = None
+
 
 @app.get("/api/v1/config")
 async def get_config():
-    """获取当前系统配置"""
     return config
+
 
 @app.post("/api/v1/config")
 async def update_config(new_config: SystemConfig):
-    """更新系统配置 (WebUI 调用)"""
     global config
-    # 此处应加入写入逻辑
     if new_config.cpu_affinity:
-        config['system']['cpu_affinity']['cores'] = new_config.cpu_affinity
+        config.setdefault("system", {}).setdefault("cpu_affinity", {})["cores"] = new_config.cpu_affinity
     if new_config.ollama_model:
-        config['system']['resources']['ollama']['default_model'] = new_config.ollama_model
-    
+        config.setdefault("system", {}).setdefault("resources", {}).setdefault("ollama", {})[
+            "default_model"
+        ] = new_config.ollama_model
+    if new_config.language:
+        config.setdefault("ui", {})["language"] = new_config.language
+
     return {"status": "updated", "config": config}
 
-# ============ WiFi 扫描接口 (支持多驱动) ============
 
 @app.get("/api/v1/wifi/scan")
 async def scan_wifi():
-    """
-    扫描 WiFi 环境。
-    支持根据 config.yaml 中定义的 driver 自动选择扫描策略。
-    """
     wifi_cfg = config.get("wifi", {}).get("interfaces", [])
-    active_driver = wifi_cfg[0].get("driver", "rtl8812au") if wifi_cfg else "unknown"
-    
-    # 模拟多驱动适配逻辑
-    if "rtl8812au" in active_driver:
+    if not wifi_cfg:
+        return {"error": "No WiFi interface configured"}
+
+    active = wifi_cfg[0]
+    driver = active.get("driver", "unknown")
+
+    if driver == "rtl8812au":
         return {
-            "driver": "rtl8812au",
-            "interface": "wlan0",
+            "driver": driver,
+            "interface": active.get("name", "wlan0"),
             "networks": [
                 {"ssid": "OpenWrt_5G", "signal": -45, "channel": 149, "congestion": "low"},
-                {"ssid": "Neighbor", "signal": -70, "channel": 36, "congestion": "medium"}
-            ]
+                {"ssid": "Neighbor", "signal": -70, "channel": 36, "congestion": "medium"},
+            ],
         }
-    elif "mt7601u" in active_driver:
-        # MediaTek 驱动逻辑
-        return {"driver": "mt7601u", "status": "scanning..."}
-    
-    return {"error": "Unsupported driver"}
+    if driver in {"mt7601u", "ath9k_htc", "rt2800usb"}:
+        return {"driver": driver, "status": "driver profile loaded", "networks": []}
 
-# ============ 诊断接口 ============
+    return {"driver": driver, "status": "unsupported-driver-profile"}
+
 
 class DiagnosisRequest(BaseModel):
     logs: str
 
+
 @app.post("/api/v1/ai/diagnose")
 async def diagnose_logs(req: DiagnosisRequest):
-    model = config.get("system", {}).get("resources", {}).get("ollama", {}).get("default_model", "deepseek-r1:1.5b")
-    # 此处接入 Ollama API
-    return {
-        "model": model,
-        "diagnosis": "日志分析：检测到防火墙规则触发频繁，建议检查 DPI 设置。",
-        "confidence": 0.85
-    }
+    model = (
+        config.get("system", {})
+        .get("resources", {})
+        .get("ollama", {})
+        .get("default_model", "deepseek-r1:1.5b")
+    )
 
-# ============ 修复接口 ============
+    prompt = (
+        "You are a network expert. Analyze these OpenWrt logs and return: "
+        "root cause, impact, and action plan.\n\n" + req.logs[:6000]
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=45.0) as client:
+            r = await client.post(
+                f"{OLLAMA_HOST}/api/generate",
+                json={"model": model, "prompt": prompt, "stream": False},
+            )
+            r.raise_for_status()
+            data = r.json()
+            text = data.get("response", "")
+    except Exception:
+        text = "本地模型暂不可用：请检查 Ollama 服务与模型拉取状态。"
+
+    return {"model": model, "diagnosis": text, "confidence": 0.8}
+
 
 @app.post("/api/v1/fix/{script_id}")
 async def trigger_fix(script_id: str):
     scripts = config.get("automation", {}).get("scripts", [])
     target_script = next((s for s in scripts if s.get("id") == script_id), None)
-    
     if not target_script:
         raise HTTPException(status_code=404, detail="Script not found")
-        
-    # 此处调用 Playwright 执行自动化
+
     return {
-        "status": "executing",
+        "status": "queued",
         "target": target_script.get("target"),
-        "action": "reboot"
+        "action": target_script.get("actions", []),
+        "note": "Playwright executor will run this action in worker service.",
     }

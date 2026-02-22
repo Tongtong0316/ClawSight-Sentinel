@@ -32,11 +32,13 @@ services:
     restart: always
 
   sentinel-api:
-    build: ./sentinel_api
+    build:
+      context: ./sentinel_api
     container_name: sentinel-api
     privileged: true # 允许访问 USB WiFi
     volumes:
       - /mnt/tf_card/logs:/app/logs
+      - ./config.example.yaml:/app/config/config.yaml:ro
       - /dev/bus/usb:/dev/bus/usb
     ports:
       - "8000:8000"
