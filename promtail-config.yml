@@ -22,7 +22,6 @@ scrape_configs:
   - job_name: openwrt-syslog
     syslog:
       listen_address: 0.0.0.0:514
-      protocol: udp
       labels:
         job: openwrt
         host: openwrt-router
