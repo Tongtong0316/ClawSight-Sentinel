@@ -130,6 +130,18 @@ def list_files(directory: Path, limit: int = 20) -> List[Dict[str, Any]]:
     return summaries
 
 
+def list_analyses(limit: int = 20) -> List[Dict[str, Any]]:
+    dirs = storage_dirs()
+    files = sorted(dirs["analysis"].iterdir(), key=lambda p: p.stat().st_mtime, reverse=True)
+    entries = []
+    for entry in files[:limit]:
+        data = load_analysis_file(entry)
+        if data:
+            data["_file"] = entry.name
+            entries.append(data)
+    return entries
+
+
 def store_analysis_entry(entry: Dict[str, Any]) -> Path:
     dirs = storage_dirs()
     timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
