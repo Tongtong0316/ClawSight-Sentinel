@@ -29,6 +29,9 @@ services:
     container_name: sentinel-syslog
     volumes:
       - ./syslog_receiver.py:/app/receiver.py:ro
+      - /mnt/tf_card/sentinel:/mnt/tf_card/sentinel
+    environment:
+      - LOG_DIR=/mnt/tf_card/sentinel/raw_logs
     command: python /app/receiver.py
     ports:
       - "514:514/udp"
