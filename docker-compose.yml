@@ -23,7 +23,9 @@ services:
     restart: always
 
   syslog-receiver:
-    image: python:3.11-slim
+    build:
+      context: .
+      dockerfile: syslog_receiver.Dockerfile
     container_name: sentinel-syslog
     volumes:
       - ./syslog_receiver.py:/app/receiver.py:ro
