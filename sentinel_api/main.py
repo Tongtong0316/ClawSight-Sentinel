@@ -161,8 +161,8 @@ async def diagnose_logs(req: DiagnosisRequest):
             r.raise_for_status()
             data = r.json()
             text = data.get("response", "")
-    except Exception:
-        text = "本地模型暂不可用：请检查 Ollama 服务与模型拉取状态。"
+    except Exception as e:
+        text = f"本地模型暂不可用：{type(e).__name__}: {e}"
 
     return {"model": model, "diagnosis": text, "confidence": 0.8}
 
