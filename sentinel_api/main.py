@@ -380,6 +380,7 @@ class SystemConfig(BaseModel):
     language: Optional[str] = None
     scheduler_enabled: Optional[bool] = None
     scheduler_frequency: Optional[int] = None
+    storage_path: Optional[str] = None
 
 
 class DiagnosisRequest(BaseModel):
@@ -406,6 +407,8 @@ async def update_config(new_config: SystemConfig):
         config.setdefault("analysis", {})["enabled"] = new_config.scheduler_enabled
     if new_config.scheduler_frequency is not None:
         config.setdefault("analysis", {})["frequency_minutes"] = new_config.scheduler_frequency
+    if new_config.storage_path is not None:
+        config.setdefault("storage", {})["log_path"] = new_config.storage_path
     persist_config(config)
     update_next_run()
     return {"status": "updated", "config": config}
