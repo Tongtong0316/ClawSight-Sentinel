@@ -160,7 +160,7 @@ async def diagnose_logs(req: DiagnosisRequest):
                     "model": model,
                     "prompt": prompt,
                     "stream": False,
-                    "options": {"num_predict": 160, "temperature": 0.2},
+                    "options": {"num_predict": 20, "temperature": 0.1},
                 },
             )
             r.raise_for_status()
