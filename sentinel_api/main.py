@@ -320,18 +320,20 @@ async def scheduler_loop():
             update_next_run()
 
 
-def initialize():
-    global config
+@app.on_event("startup")
+async def startup_event():
+    global analysis_task
     config = load_config()
     storage_dirs()
     update_next_run()
+    analysis_task = asyncio.create_task(scheduler_loop())
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
     global analysis_task
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    analysis_task = loop.create_task(scheduler_loop())
-
-
-initialize()
+    if analysis_task:
+        analysis_task.cancel()
 
 
 @app.get("/healthz")
