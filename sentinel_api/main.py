@@ -1,7 +1,8 @@
+import asyncio
 import json
 import os
 from copy import deepcopy
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -33,11 +34,14 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
     "automation": {"scripts": []},
     "storage": {"log_path": "/mnt/tf_card/sentinel", "retention": {"days": 30, "max_size_gb": 28}},
-    "analysis": {"frequency_minutes": 5, "max_logs_per_run": 2000},
+    "analysis": {"frequency_minutes": 5, "max_logs_per_run": 2000, "enabled": True},
     "notifications": {"enabled": False, "webhook_url": ""},
 }
 
 config: Dict[str, Any]
+
+analysis_state: Dict[str, Any] = {"last_run": None, "next_run": None, "running": False}
+analysis_task: Optional[asyncio.Task] = None
 
 
 def deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
@@ -223,10 +227,91 @@ def get_dashboard_snapshot() -> Dict[str, Any]:
     }
 
 
+def gather_recent_logs() -> str:
+    dirs = storage_dirs()
+    raw = dirs["raw"]
+    if not raw.exists():
+        return ""
+    files = sorted(raw.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True)
+    max_count = config.get("analysis", {}).get("max_logs_per_run", 2000)
+    lines = []
+    for f in files[:5]:
+        try:
+            content = f.read_text(encoding="utf-8")
+            lines.extend(content.splitlines())
+        except Exception:
+            continue
+        if len(lines) >= max_count:
+            break
+    return "\n".join(lines[:max_count])
+
+
+async def run_scheduled_analysis():
+    global analysis_state
+    if analysis_state.get("running"):
+        return
+    analysis_state["running"] = True
+    try:
+        logs = gather_recent_logs()
+        if not logs:
+            return
+        model = config.get("system", {}).get("resources", {}).get("ollama", {}).get("default_model", "gemma:2b")
+        prompt = "You are a network expert. Analyze these OpenWrt logs and return: root cause, impact, and action plan.\n\n" + logs[:6000]
+        try:
+            async with httpx.AsyncClient(timeout=180.0) as client:
+                resp = await client.post(
+                    f"{OLLAMA_HOST}/api/generate",
+                    json={"model": model, "prompt": prompt, "stream": False, "options": {"num_predict": 20, "temperature": 0.1}},
+                )
+                resp.raise_for_status()
+                diagnosis_text = resp.json().get("response", "")
+        except Exception as e:
+            diagnosis_text = f"Error: {e}"
+        logs_count = len([l for l in logs.splitlines() if l.strip()])
+        entry = standardize_diagnosis(diagnosis_text, model, logs_count)
+        entry["logs_file"] = str(store_raw_log(logs))
+        entry["source"] = "scheduled"
+        store_analysis_entry(entry)
+        analysis_state["last_run"] = datetime.utcnow().isoformat()
+    finally:
+        analysis_state["running"] = False
+        update_next_run()
+
+
+def update_next_run():
+    freq = config.get("analysis", {}).get("frequency_minutes", 5)
+    if config.get("analysis", {}).get("enabled", True):
+        analysis_state["next_run"] = (datetime.utcnow() + timedelta(minutes=freq)).isoformat()
+    else:
+        analysis_state["next_run"] = None
+
+
+async def scheduler_loop():
+    while True:
+        await asyncio.sleep(10)
+        if not config.get("analysis", {}).get("enabled", True):
+            continue
+        next_run = analysis_state.get("next_run")
+        if not next_run:
+            continue
+        try:
+            target = datetime.fromisoformat(next_run)
+        except Exception:
+            continue
+        if datetime.utcnow() >= target:
+            asyncio.create_task(run_scheduled_analysis())
+            update_next_run()
+
+
 def initialize():
     global config
     config = load_config()
     storage_dirs()
+    update_next_run()
+    global analysis_task
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    analysis_task = loop.create_task(scheduler_loop())
 
 
 initialize()
@@ -265,6 +350,8 @@ class SystemConfig(BaseModel):
     cpu_affinity: Optional[List[int]] = None
     ollama_model: Optional[str] = None
     language: Optional[str] = None
+    scheduler_enabled: Optional[bool] = None
+    scheduler_frequency: Optional[int] = None
 
 
 class DiagnosisRequest(BaseModel):
@@ -287,7 +374,12 @@ async def update_config(new_config: SystemConfig):
         ] = new_config.ollama_model
     if new_config.language:
         config.setdefault("ui", {})["language"] = new_config.language
+    if new_config.scheduler_enabled is not None:
+        config.setdefault("analysis", {})["enabled"] = new_config.scheduler_enabled
+    if new_config.scheduler_frequency is not None:
+        config.setdefault("analysis", {})["frequency_minutes"] = new_config.scheduler_frequency
     persist_config(config)
+    update_next_run()
     return {"status": "updated", "config": config}
 
 
@@ -366,6 +458,37 @@ async def wifi_analysis():
 @app.get("/api/v1/dashboard")
 async def dashboard():
     return get_dashboard_snapshot()
+
+
+@app.get("/api/v1/scheduler/status")
+async def scheduler_status():
+    return {"enabled": config.get("analysis", {}).get("enabled", True), "frequency_minutes": config.get("analysis", {}).get("frequency_minutes", 5), "last_run": analysis_state.get("last_run"), "next_run": analysis_state.get("next_run"), "running": analysis_state.get("running", False)}
+
+
+class SchedulerConfig(BaseModel):
+    enabled: Optional[bool] = None
+    frequency_minutes: Optional[int] = None
+
+
+@app.post("/api/v1/scheduler/config")
+async def update_scheduler_config(cfg: SchedulerConfig):
+    global config
+    config.setdefault("analysis", {})
+    if cfg.enabled is not None:
+        config["analysis"]["enabled"] = cfg.enabled
+    if cfg.frequency_minutes is not None:
+        config["analysis"]["frequency_minutes"] = cfg.frequency_minutes
+    persist_config(config)
+    update_next_run()
+    return {"status": "updated", "config": config.get("analysis")}
+
+
+@app.post("/api/v1/scheduler/run")
+async def trigger_manual_analysis():
+    if analysis_state.get("running"):
+        return {"status": "already_running"}
+    asyncio.create_task(run_scheduled_analysis())
+    return {"status": "started"}
 
 
 @app.post("/api/v1/fix/{script_id}")
