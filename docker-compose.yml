@@ -5,7 +5,7 @@ services:
     volumes:
       - /mnt/tf_card/loki:/loki
     command: -config.file=/etc/loki/local-config.yaml
-    cpuset_cpus: "0,1" # 限制在双核范围内
+    cpuset: "0-1" # 限制在双核范围内
     mem_limit: 512m
     restart: always
 
@@ -23,12 +23,9 @@ services:
     container_name: sentinel-ollama
     volumes:
       - ollama_data:/root/.ollama
-    deploy:
-      resources:
-        limits:
-          cpus: '1.5' # 限制 AI 核心，防止抢占
-          memory: 3G
-    cpuset_cpus: "0,1"
+    cpus: 1.5 # 限制 AI 核心，防止抢占
+    mem_limit: 3g
+    cpuset: "0-1"
     restart: always
 
   sentinel-api:
