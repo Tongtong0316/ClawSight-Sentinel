@@ -153,7 +153,7 @@ async def diagnose_logs(req: DiagnosisRequest):
     )
 
     try:
-        async with httpx.AsyncClient(timeout=45.0) as client:
+        async with httpx.AsyncClient(timeout=180.0) as client:
             r = await client.post(
                 f"{OLLAMA_HOST}/api/generate",
                 json={"model": model, "prompt": prompt, "stream": False},
