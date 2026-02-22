@@ -9,6 +9,7 @@ clients:
   - url: http://loki:3100/loki/api/v1/push
 
 scrape_configs:
+  # 本地日志
   - job_name: sentinel-local-logs
     static_configs:
       - targets: [localhost]
@@ -16,3 +17,11 @@ scrape_configs:
           job: varlogs
           host: sentinel
           __path__: /var/log/*.log
+
+  # OpenWRT syslog 接收
+  - job_name: openwrt-syslog
+    syslog:
+      listen_address: 0.0.0.0:514
+      labels:
+        job: openwrt
+        host: openwrt-router
