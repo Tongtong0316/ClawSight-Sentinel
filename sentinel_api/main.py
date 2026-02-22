@@ -20,6 +20,7 @@ from pydantic import BaseModel
 from .collector import DataCollector
 from .analyzer import NetworkAnalyzer
 from .narrator import EventNarrator, identify_device, describe_dhcp_allocate, describe_device_offline, describe_abnormal_broadcast, describe_network_health
+from .wifi_scanner import WifiScanner
 
 # ========== 配置 ==========
 
@@ -66,6 +67,7 @@ config: Dict[str, Any] = {}
 collector: Optional[DataCollector] = None
 analyzer: Optional[NetworkAnalyzer] = None
 narrator: Optional[EventNarrator] = None
+wifi_scanner: Optional[WifiScanner] = None
 analysis_task: Optional[asyncio.Task] = None
 last_analysis: Optional[Dict] = None
 
@@ -114,6 +116,10 @@ def init_services():
     # 初始化解说员
     dhcp_server = config.get("openwrt", {}).get("ip", "192.168.100.1")
     narrator = EventNarrator(dhcp_server=dhcp_server)
+    
+    # 初始化 WiFi 扫描器
+    wifi_interface = config.get("wifi", {}).get("interface", "wlan0")
+    wifi_scanner = WifiScanner(interface=wifi_interface)
 
 
 # ========== 前端路由 ==========
@@ -203,6 +209,104 @@ async def get_wifi_stats():
         raise HTTPException(status_code=503, detail="Service not initialized")
     
     return await collector.get_wifi_stats()
+
+
+# ========== WiFi 无线环境扫描 API ==========
+
+@app.get("/api/v2/wifi/scan")
+async def wifi_environment_scan():
+    """WiFi 无线环境扫描 - 使用 USB 网卡检测周围 WiFi"""
+    if not wifi_scanner:
+        return {"error": "WiFi scanner not initialized"}
+    
+    result = await wifi_scanner.quick_scan()
+    return result
+
+
+@app.get("/api/v2/wifi/scan/full")
+async def wifi_environment_scan_full():
+    """完整 WiFi 扫描 - 包含详细信息"""
+    if not wifi_scanner:
+        return {"error": "WiFi scanner not initialized"}
+    
+    result = await wifi_scanner.scan()
+    return {
+        "timestamp": result.timestamp,
+        "interface": result.interface,
+        "mode": result.mode,
+        "networks_count": len(result.networks),
+        "networks": [
+            {
+                "ssid": n.ssid or "(隐藏)",
+                "bssid": n.bssid,
+                "signal_dbm": n.signal_dbm,
+                "signal_percent": n.signal_percent,
+                "channel": n.channel,
+                "frequency": n.frequency,
+                "band": n.band,
+                "security": n.security
+            }
+            for n in result.networks
+        ],
+        "channels_2g": [
+            {
+                "channel": c.channel,
+                "utilization_percent": c.utilization_percent,
+                "networks_count": c.networks_count
+            }
+            for c in result.channels_2g
+        ],
+        "channels_5g": [
+            {
+                "channel": c.channel,
+                "utilization_percent": c.utilization_percent,
+                "networks_count": c.networks_count
+            }
+            for c in result.channels_5g
+        ],
+        "recommendations": result.recommendations
+    }
+
+
+@app.get("/api/v2/wifi/neighbors")
+async def wifi_neighbors():
+    """获取邻近 WiFi 网络列表"""
+    if not wifi_scanner:
+        return {"error": "WiFi scanner not initialized"}
+    
+    neighbors = await wifi_scanner.get_neighbors()
+    return {
+        "count": len(neighbors),
+        "networks": neighbors
+    }
+
+
+@app.get("/api/v2/wifi/channels/{band}")
+async def wifi_channel_status(band: str):
+    """获取信道状态"""
+    if not wifi_scanner:
+        return {"error": "WiFi scanner not initialized"}
+    
+    if band not in ["2.4G", "5G"]:
+        band = "2.4G"
+    
+    channels = await wifi_scanner.get_channel_status(band)
+    return {"band": band, "channels": channels}
+
+
+@app.get("/api/v2/wifi/best-channel")
+async def wifi_best_channel():
+    """获取最佳信道推荐"""
+    if not wifi_scanner:
+        return {"error": "WiFi scanner not initialized"}
+    
+    result = await wifi_scanner.quick_scan()
+    
+    return {
+        "best_channel_2g": result.get("best_channel_2g"),
+        "best_channel_5g": result.get("best_channel_5g"),
+        "recommendations": result.get("recommendations", [])
+    }
 
 
 @app.get("/api/v2/bandwidth")
@@ -505,10 +609,31 @@ async def agent_guide():
             "问题列表": "/api/v2/narrator/issues",
             "离线设备": "/api/v2/narrator/offline",
             "设备列表": "/api/v2/devices",
-            "WiFi统计": "/api/v2/wifi/stats",
+            "WiFi扫描(推荐)": "/api/v2/wifi/scan",
+            "WiFi邻接网络": "/api/v2/wifi/neighbors",
+            "WiFi最佳信道": "/api/v2/wifi/best-channel",
+            "WiFi信道状态": "/api/v2/wifi/channels/2.4G",
             "带宽使用": "/api/v2/bandwidth",
             "历史趋势": "/api/v2/trends",
             "最近日志": "/api/v2/logs/recent"
+        },
+        
+        "wifi_scan_guide": {
+            "purpose": "使用 Debian 上的 USB 无线网卡检测周围 WiFi 环境",
+            "功能": [
+                "检测周围 WiFi 网络(SSID、信号、信道、安全类型)",
+                "分析频段拥堵状态(2.4G/5G)",
+                "推荐最佳信道",
+                "检测信道重叠和干扰"
+            ],
+            "endpoints": {
+                "快速扫描": "/api/v2/wifi/scan",
+                "完整扫描": "/api/v2/wifi/scan/full",
+                "邻近网络": "/api/v2/wifi/neighbors",
+                "最佳信道": "/api/v2/wifi/best-channel",
+                "信道状态(2.4G)": "/api/v2/wifi/channels/2.4G",
+                "信道状态(5G)": "/api/v2/wifi/channels/5G"
+            }
         }
     }
 
